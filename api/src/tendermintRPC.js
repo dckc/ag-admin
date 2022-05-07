@@ -1,4 +1,4 @@
-const { getContent } = require('./discordGuild.js');
+import { getContent } from './discordGuild.js';
 
 const { fromEntries } = Object;
 
@@ -7,14 +7,14 @@ const config = {
   address: 'agoric15qxmfufeyj4zm9zwnsczp72elxsjsvd0vm4q8h',
 };
 
-const searchBySender = address =>
+const searchBySender = (address) =>
   `/tx_search?query="transfer.sender='${address}'"&per_page=100`;
 
 /**
  * @param {{ hash: string, tx_result: { log: string }}[]} txs
  * @returns {{ hash: string, recipient: string, sender: string, amount: string}[]}
  */
-const transfers = txs =>
+const transfers = (txs) =>
   txs
     .map(({ hash, tx_result: { log: logText } }) => {
       const [{ events }] = JSON.parse(logText);
@@ -39,7 +39,7 @@ const main = async ({ get }) => {
     searchBySender(config.address),
     {},
     { get },
-  ).then(txt => JSON.parse(txt).result.txs);
+  ).then((txt) => JSON.parse(txt).result.txs);
 
   console.log(transfers(txs.slice(0, 3)));
 };
@@ -49,7 +49,7 @@ if (require.main === module) {
   main({
     // eslint-disable-next-line global-require
     get: require('https').get,
-  }).catch(err => console.error(err));
+  }).catch((err) => console.error(err));
 }
 
-module.exports = { searchBySender, transfers };
+export { searchBySender, transfers };

@@ -1,7 +1,5 @@
 /* global Buffer */
 // @ts-check
-const { makeConfig } = require('./config.js');
-
 const { freeze } = Object;
 
 /**
@@ -14,13 +12,13 @@ const { freeze } = Object;
 function getContent(host, path, headers, { get }) {
   // console.log('calling Discord API', { host, path, headers });
   return new Promise((resolve, reject) => {
-    const req = get({ host, path, headers }, res => {
+    const req = get({ host, path, headers }, (res) => {
       /** @type { Buffer[] } */
       const chunks = [];
       // console.log({ status: res.statusCode,
       //               headers: res.headers });
       res
-        .on('data', data => {
+        .on('data', (data) => {
           chunks.push(data);
         })
         .on('end', () => {
@@ -28,7 +26,7 @@ function getContent(host, path, headers, { get }) {
           resolve(body);
         });
     });
-    req.on('error', err => {
+    req.on('error', (err) => {
       console.error('Discord API error:', err);
       reject(err);
     });
@@ -36,7 +34,7 @@ function getContent(host, path, headers, { get }) {
 }
 
 const { keys } = Object;
-const query = opts =>
+const query = (opts) =>
   keys(opts).length > 0 ? `?${new URLSearchParams(opts).toString()}` : '';
 
 /**
@@ -102,13 +100,13 @@ function DiscordAPI(token, { get, setTimeout }) {
    * @param {string} path
    * @returns {Promise<any>}
    */
-  const getJSON = async path => {
+  const getJSON = async (path) => {
     console.log('getJSON', { path });
     const body = await getContent(host, path, headers, { get });
     const data = JSON.parse(body);
     console.log('Discord done:', Object.keys(data), data);
     if ('retry_after' in data) {
-      await new Promise(r => setTimeout(r, data.retry_after));
+      await new Promise((r) => setTimeout(r, data.retry_after));
       return getJSON(path);
     }
     return data;
@@ -116,7 +114,7 @@ function DiscordAPI(token, { get, setTimeout }) {
 
   return freeze({
     /** @param { Snowflake } channelID */
-    channels: channelID => {
+    channels: (channelID) => {
       return freeze({
         /**
          * @param {Record<string,unknown>} opts
@@ -125,13 +123,13 @@ function DiscordAPI(token, { get, setTimeout }) {
         getMessages: (opts = {}) =>
           getJSON(`${api}/channels/${channelID}/messages${query(opts)}`),
         /** @param { Snowflake } messageID */
-        messages: messageID =>
+        messages: (messageID) =>
           freeze({
             /**
              * @param {string} emoji
              * @returns {Promise<UserObject[]>}
              */
-            reactions: emoji =>
+            reactions: (emoji) =>
               getJSON(
                 `${api}/channels/${channelID}/messages/${messageID}/reactions/${encodeURIComponent(
                   emoji,
@@ -144,7 +142,7 @@ function DiscordAPI(token, { get, setTimeout }) {
      * @param { string } userID
      * @returns { Promise<UserObject> }
      */
-    users: userID => getJSON(`${api}/users/${userID}`),
+    users: (userID) => getJSON(`${api}/users/${userID}`),
     /** @param { string } guildID */
     guilds(guildID) {
       return freeze({
@@ -228,6 +226,21 @@ async function pagedMembers(guild) {
 }
 
 /**
+ * @param { NodeJS.ProcessEnv } env
+ * @returns { TemplateTag }
+ * @typedef { (parts: TemplateStringsArray, ...args: unknown[]) => string } TemplateTag
+ */
+const makeConfig = (env) => {
+  return ([name], ..._args) => {
+    const value = env[name];
+    if (value === undefined) {
+      throw Error(`${name} not configured`);
+    }
+    return value;
+  };
+};
+
+/**
  * @param {Record<string, string | undefined>} env
  * @param {{
  *   get: typeof import('https').get,
@@ -247,7 +260,7 @@ async function integrationTest(env, { stdout, get, setTimeout }) {
   stdout.write(JSON.stringify(members, null, 2));
 }
 
-/* global require, process */
+/* global require, process, module */
 if (require.main === module) {
   integrationTest(process.env, {
     stdout: process.stdout,
@@ -256,8 +269,7 @@ if (require.main === module) {
     // @ts-ignore
     // eslint-disable-next-line no-undef
     setTimeout,
-  }).catch(err => console.error(err));
+  }).catch((err) => console.error(err));
 }
 
-/* global module */
-module.exports = { DiscordAPI, avatar, getContent, paged };
+export { DiscordAPI, avatar, getContent, paged };

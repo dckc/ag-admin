@@ -2,8 +2,16 @@
 import { E } from '@endo/far';
 import process from 'process'; // WARNING: ambient
 
-const sheetsPluginModule = './src/plugin-sheets.js';
-const theWorkbookKey = 'workbook1';
+const plugins = {
+  sheets: {
+    module: './src/plugin-sheets.js',
+    key: 'workbook1',
+  },
+  tendermint: {
+    module: './src/plugin-tendermint.js',
+    key: 'tendermint1',
+  },
+};
 
 /** @template T @typedef {import('@endo/eventual-send').ERef<T>} ERef */
 /** @typedef {typeof import('google-spreadsheet').GoogleSpreadsheet} GoogleSpreadsheetT */
@@ -16,34 +24,40 @@ const theWorkbookKey = 'workbook1';
  * }} endowments
  *
  */
-export const installSheetsPlugin = async (
+export const installPlugins = async (
   homeP,
   { pathResolve, installUnsafePlugin },
 ) => {
-  const { GOOGLE_SERVICES_EMAIL, GCS_PRIVATE_KEY, SHEET1_ID } = process.env;
-  if (!(GOOGLE_SERVICES_EMAIL && GCS_PRIVATE_KEY)) {
-    throw Error('no credentials');
-  }
-  if (!SHEET1_ID) {
-    throw Error('which sheet?');
-  }
-
   const { scratch } = E.get(homeP);
 
-  /** @type { GoogleSpreadsheetT } */
-  const doc = await installUnsafePlugin(pathResolve(sheetsPluginModule), {
-    credentials: {
-      client_email: GOOGLE_SERVICES_EMAIL,
-      private_key: GCS_PRIVATE_KEY,
-    },
-    sheetId: SHEET1_ID,
-  });
-  console.log({ sheetsPluginRoot: doc });
-  await E(scratch).set(theWorkbookKey, doc);
-  const sheet = E(doc).sheetByIndex(0);
-  const row = await E(sheet).lookup('Pete Rose');
-  console.log({ row });
-};
-harden(installSheetsPlugin);
+  const { GOOGLE_SERVICES_EMAIL, GCS_PRIVATE_KEY, SHEET1_ID, TENDERMINT_HOST } =
+    process.env;
 
-export default installSheetsPlugin;
+  if (SHEET1_ID && GOOGLE_SERVICES_EMAIL && GCS_PRIVATE_KEY) {
+    const { module, key } = plugins.sheets;
+    /** @type { GoogleSpreadsheetT } */
+    const doc = await installUnsafePlugin(pathResolve(module), {
+      credentials: {
+        client_email: GOOGLE_SERVICES_EMAIL,
+        private_key: GCS_PRIVATE_KEY,
+      },
+      sheetId: SHEET1_ID,
+    });
+    console.log({ sheetsPluginRoot: doc });
+    await E(scratch).set(key, doc);
+    const sheet = E(doc).sheetByIndex(0);
+    const row = await E(sheet).lookup('Pete Rose');
+    console.log({ row });
+  }
+  if (TENDERMINT_HOST) {
+    const { module, key } = plugins.tendermint;
+    const endpoint = await installUnsafePlugin(pathResolve(module), {
+      host: TENDERMINT_HOST,
+    });
+    console.log({ endpoint });
+    await E(scratch).set(key, endpoint);
+  }
+};
+harden(installPlugins);
+
+export default installPlugins;
