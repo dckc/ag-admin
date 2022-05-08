@@ -11,6 +11,10 @@ const plugins = {
     module: './src/plugin-tendermint.js',
     key: 'tendermint1',
   },
+  discord: {
+    module: './src/plugin-discord.js',
+    key: 'discord1',
+  },
 };
 
 /** @template T @typedef {import('@endo/eventual-send').ERef<T>} ERef */
@@ -30,8 +34,13 @@ export const installPlugins = async (
 ) => {
   const { scratch } = E.get(homeP);
 
-  const { GOOGLE_SERVICES_EMAIL, GCS_PRIVATE_KEY, SHEET1_ID, TENDERMINT_HOST } =
-    process.env;
+  const {
+    GOOGLE_SERVICES_EMAIL,
+    GCS_PRIVATE_KEY,
+    SHEET1_ID,
+    TENDERMINT_HOST,
+    DISCORD_API_TOKEN,
+  } = process.env;
 
   if (SHEET1_ID && GOOGLE_SERVICES_EMAIL && GCS_PRIVATE_KEY) {
     const { module, key } = plugins.sheets;
@@ -49,6 +58,7 @@ export const installPlugins = async (
     const row = await E(sheet).lookup('Pete Rose');
     console.log({ row });
   }
+
   if (TENDERMINT_HOST) {
     const { module, key } = plugins.tendermint;
     const endpoint = await installUnsafePlugin(pathResolve(module), {
@@ -56,6 +66,15 @@ export const installPlugins = async (
     });
     console.log({ endpoint });
     await E(scratch).set(key, endpoint);
+  }
+
+  if (DISCORD_API_TOKEN) {
+    const { module, key } = plugins.discord;
+    const discordAPI = await installUnsafePlugin(pathResolve(module), {
+      apiToken: DISCORD_API_TOKEN,
+    });
+    await E(scratch).set(key, discordAPI);
+    console.log({ key, discordAPI });
   }
 };
 harden(installPlugins);
