@@ -30,7 +30,6 @@ export const start = async (zcf) => {
   const zoe = zcf.getZoeService();
 
   const someReview = AmountMath.make(brands.Review, []);
-  const someGrant = AmountMath.make(brands.Grant, []);
 
   const { mint, issuer, brand } = makeIssuerKit('Message', AssetKind.SET);
   await zcf.saveIssuer(issuer, 'Message');
@@ -67,9 +66,11 @@ export const start = async (zcf) => {
         const doGrant = async (review) => {
           const invitation = await E(supplier).getGrantInvitation();
           const reviewAmt = await E(issuers.Review).getAmountOf(review);
+          const [{ address }] = reviewAmt;
+          assert.typeof(address, 'string');
           const proposal = harden({
             give: { Review: reviewAmt },
-            want: { Grant: someGrant },
+            want: { Grant: AmountMath.make(brands.Grant, [{ address }]) },
           });
           const seat = E(zoe).offer(
             invitation,

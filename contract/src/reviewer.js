@@ -10,16 +10,6 @@ const AgoricChain = /** @type {const} */ ({
   addressPattern: /(agoric1\S+)/, // TODO: correct length, chars
 });
 
-const AgDiscord = /** @type {const} */ ({
-  guild: '585576150827532298',
-  channels: {
-    'validator-1-bld': '946137891023777802',
-  },
-  roles: {
-    mod1bld: '946816769870430308',
-  },
-});
-
 /** @typedef {import('../../api/src/discordGuild.js').MessageObject} MessageObject */
 /** @typedef {import('../../api/src/discordGuild.js').GuildMember} GuildMember */
 /** @typedef {import('../../api/src/discordGuild.js').Snowflake} Snowflake */
@@ -34,14 +24,7 @@ const AgDiscord = /** @type {const} */ ({
  * }} zcf
  */
 export const start = async (zcf) => {
-  const {
-    brands,
-    channel,
-    guild,
-    role = AgDiscord.roles.mod1bld,
-    quorum = 2,
-  } = zcf.getTerms();
-  assert('Request' in brands, `missing Request brand`);
+  const { channel, guild, role, quorum = 2 } = zcf.getTerms();
   assert(channel, X`missing channel`);
   assert(guild, X`missing guild`);
   assert.typeof(role, 'string', X`role must be string: ${q(role)}`);
@@ -86,10 +69,14 @@ export const start = async (zcf) => {
 
   /** @type {OfferHandler} */
   const reviewHook = async (seat) => {
+    const { brands } = zcf.getTerms();
+    assert('Request' in brands, `Request brand not (yet?) set`);
+
     const request = seat.getProposal();
     fit(request, {
       give: { Request: { brand: brands.Request, value: [M.any()] } },
       want: { Review: { brand: brands.Review, value: [] } },
+      exit: M.any(),
     });
     const {
       give: {
@@ -128,6 +115,9 @@ export const start = async (zcf) => {
   return {
     publicFacet: Far('Reviewer', {
       getReviewInvitation,
+    }),
+    creatorFacet: Far('ReviewerAdmin', {
+      setRequestIssuer: (issuer) => zcf.saveIssuer(issuer, 'Request'),
     }),
   };
 };
