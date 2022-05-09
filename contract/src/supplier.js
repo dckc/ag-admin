@@ -1,6 +1,8 @@
+// @ts-check
 import { AssetKind } from '@agoric/ertp';
 import { fit, M } from '@agoric/store';
 import { E } from '@endo/eventual-send';
+import { Far } from '@endo/marshal';
 
 const AgDiscord = /** @type {const} */ ({
   guild: '585576150827532298',
@@ -19,10 +21,12 @@ const AgDiscord = /** @type {const} */ ({
  * @param {ZCF<{
  *   installations: {
  *     reviewer: Installation<typeof import('./reviewer.js').start>,
- *     reviewer: Installation<typeof import('./advocate.js').start>,
+ *     advocate: Installation<typeof import('./validatorAdvocate.js').start>,
  *   },
  *   discordApi: ERef<DiscordAPI_T>,
- * }} zcf
+ * }>} zcf
+ *
+ * TODO: move discordApi to private arg
  */
 export const start = async (zcf) => {
   const { installations, discordApi } = zcf.getTerms();
@@ -51,16 +55,24 @@ export const start = async (zcf) => {
   /** @type {OfferHandler} */
   const grantHandler = (seat) => {
     const proposal = seat.getProposal();
-    fit(proposal, {
-      give: {
-        Review: { brand: reviewBrand, value: [{ address: M.string() }] },
-      },
-      want: { Grant: { brand, value: [{ address: M.string() }] } },
-      exit: M.any(),
-    });
+    fit(
+      proposal,
+      harden({
+        give: {
+          Review: { brand: reviewBrand, value: [{ address: M.string() }] },
+        },
+        want: { Grant: { brand, value: [{ address: M.string() }] } },
+        exit: M.any(),
+      }),
+    );
     const { give, want } = proposal;
     assert.equal(give.Review.value[0].address, want.Grant.value[0].address);
 
+    // TODO: don't grant right away; rather:
+    // 1. upsert into google sheet
+    // 2. notify signer?
+    // 3. stand by for Tx using tendermint RPC
+    // 4. mint the grant
     const { zcfSeat: mintSeat } = zcf.makeEmptySeatKit();
     mint.mintGains(want, mintSeat);
     const { zcfSeat: burnSeat } = zcf.makeEmptySeatKit();
@@ -72,7 +84,7 @@ export const start = async (zcf) => {
   const getGrantInvitation = () =>
     zcf.makeInvitation(grantHandler, 'grant reviewed request');
 
-  const publicFacet = { getGrantInvitation };
+  const publicFacet = Far('GrantSupplier', { getGrantInvitation });
 
   const advocate = await E(zoe).startInstance(
     installations.advocate,

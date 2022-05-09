@@ -1,3 +1,4 @@
+// @ts-check
 import { AmountMath, AssetKind, makeIssuerKit } from '@agoric/ertp';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/marshal';
@@ -9,13 +10,18 @@ const AgoricChain = /** @type {const} */ ({
 });
 
 /** @typedef {import('../../api/src/discordGuild.js').Channel_T} DiscordChannel */
+/** @typedef {Awaited<ReturnType<typeof import('./reviewer.js').start>>['publicFacet']} Reviewer */
+/** @typedef {Awaited<ReturnType<typeof import('./supplier.js').start>>['publicFacet']} Supplier */
 
 /**
  * @param {ZCF<{
  *   channel: ERef<DiscordChannel>,
  *   notifier: ERef<Notifier<undefined>>,
+ *   reviewer: Reviewer,
+ *   supplier: Supplier,
  * }>} zcf
  *
+ * TODO: move channel to private arg
  */
 export const start = async (zcf) => {
   const { channel, reviewer, supplier, issuers, brands } = zcf.getTerms();
@@ -29,7 +35,7 @@ export const start = async (zcf) => {
 
   const zoe = zcf.getZoeService();
 
-  const someReview = AmountMath.make(brands.Review, []);
+  const someReview = AmountMath.make(brands.Review, harden([]));
 
   const { mint, issuer, brand } = makeIssuerKit('Message', AssetKind.SET);
   await zcf.saveIssuer(issuer, 'Message');
@@ -45,11 +51,11 @@ export const start = async (zcf) => {
     if (!hasAddr) return;
 
     await Promise.allSettled(
-      hasAddr.map((requestMsg) => {
+      hasAddr.map(async (requestMsg) => {
         const doReview = async () => {
           const invitation = await E(reviewer).getReviewInvitation(requestMsg);
           const proposal = harden({
-            give: { Request: AmountMath.make(brand, [requestMsg]) },
+            give: { Request: AmountMath.make(brand, harden([requestMsg])) },
             want: { Review: someReview },
           });
           const pmt = mint.mintPayment(proposal.give.Request);
@@ -66,11 +72,14 @@ export const start = async (zcf) => {
         const doGrant = async (review) => {
           const invitation = await E(supplier).getGrantInvitation();
           const reviewAmt = await E(issuers.Review).getAmountOf(review);
-          const [{ address }] = reviewAmt;
+          assert(Array.isArray(reviewAmt.value));
+          const [{ address }] = reviewAmt.value;
           assert.typeof(address, 'string');
           const proposal = harden({
             give: { Review: reviewAmt },
-            want: { Grant: AmountMath.make(brands.Grant, [{ address }]) },
+            want: {
+              Grant: AmountMath.make(brands.Grant, harden([{ address }])),
+            },
           });
           const seat = E(zoe).offer(
             invitation,
@@ -78,7 +87,7 @@ export const start = async (zcf) => {
             harden({ Review: review }),
           );
           await E(seat).getOfferResult();
-          const grant = E(seat).getPayout('Grant');
+          const grant = await E(seat).getPayout('Grant');
           const grantAmt = await E(grantPurse).deposit(grant);
           if (AmountMath.isEmpty(grantAmt)) {
             throw Error('empty grant!');

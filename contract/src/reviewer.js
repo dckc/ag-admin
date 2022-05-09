@@ -1,3 +1,4 @@
+// @ts-check
 import { AmountMath, AssetKind } from '@agoric/ertp';
 import { fit, M } from '@agoric/store';
 import { E } from '@endo/eventual-send';
@@ -13,7 +14,7 @@ const AgoricChain = /** @type {const} */ ({
 /** @typedef {import('../../api/src/discordGuild.js').MessageObject} MessageObject */
 /** @typedef {import('../../api/src/discordGuild.js').GuildMember} GuildMember */
 /** @typedef {import('../../api/src/discordGuild.js').Snowflake} Snowflake */
-/** @typedef {ReturnType<typeof import('../../api/src/discordGuild.js').DiscordAPI} DiscordAPI_T */
+/** @typedef {ReturnType<typeof import('../../api/src/discordGuild.js').DiscordAPI>} DiscordAPI_T */
 
 /**
  * @param {ZCF<{
@@ -21,7 +22,9 @@ const AgoricChain = /** @type {const} */ ({
  *   guild: ERef<ReturnType<DiscordAPI_T['guilds']>>,
  *   role: Snowflake,
  *   quorum?: number,
- * }} zcf
+ * }>} zcf
+ *
+ * TODO: move channel, guild to private args
  */
 export const start = async (zcf) => {
   const { channel, guild, role, quorum = 2 } = zcf.getTerms();
@@ -51,7 +54,9 @@ export const start = async (zcf) => {
 
   /** @param {MessageObject} msg */
   const findAddress = (msg) => {
-    const [_, address] = msg.content.match(AgoricChain.addressPattern);
+    const [_, address] =
+      msg.content.match(AgoricChain.addressPattern) ||
+      assert.fail(`no address`);
     assert.typeof(address, 'string', X`no address in ${q(msg.content)}`);
     return address;
   };
@@ -73,28 +78,35 @@ export const start = async (zcf) => {
     assert('Request' in brands, `Request brand not (yet?) set`);
 
     const request = seat.getProposal();
-    fit(request, {
-      give: { Request: { brand: brands.Request, value: [M.any()] } },
-      want: { Review: { brand: brands.Review, value: [] } },
-      exit: M.any(),
-    });
+    fit(
+      request,
+      harden({
+        give: { Request: { brand: brands.Request, value: [M.any()] } },
+        want: { Review: { brand: brands.Review, value: [] } },
+        exit: M.any(),
+      }),
+    );
     const {
       give: {
         Request: { value: requestValue },
       },
     } = request;
 
+    assert(Array.isArray(requestValue));
     /** @type {MessageObject[]} */
     const [message] = requestValue;
     const address = findAddress(message);
     const endorsers = await findEnoughEndorsers(message);
-    const reviewAmt = AmountMath.make(brand, [
-      {
-        message,
-        address,
-        endorsers,
-      },
-    ]);
+    const reviewAmt = AmountMath.make(
+      brand,
+      harden([
+        {
+          message,
+          address,
+          endorsers,
+        },
+      ]),
+    );
 
     const { zcfSeat: mintSeat } = zcf.makeEmptySeatKit();
     mint.mintGains({ Review: reviewAmt }, mintSeat);
