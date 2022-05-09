@@ -89,6 +89,9 @@ const query = (opts) =>
  *   content: string,
  *   timestamp: TimeStamp
  * }} MessageObject
+ *
+ * @typedef {ReturnType<typeof DiscordAPI>} DiscordAPI_T
+ * @typedef {ReturnType<DiscordAPI_T['channels']>} Channel_T
  */
 function DiscordAPI(token, { get, setTimeout }) {
   // cribbed from rchain-dbr/o2r/gateway/server/main.js
