@@ -2,6 +2,8 @@ import { AmountMath, AssetKind, makeIssuerKit } from '@agoric/ertp';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/marshal';
 
+const { details: X } = assert;
+
 const AgoricChain = /** @type {const} */ ({
   addressPattern: /agoric1/, // TODO: correct length, chars
 });
@@ -16,17 +18,21 @@ const AgoricChain = /** @type {const} */ ({
  *
  */
 export const start = async (zcf) => {
-  const { channel, supplier, issuers, brands } = zcf.getTerms();
+  const { channel, reviewer, supplier, issuers, brands } = zcf.getTerms();
+  assert('Review' in issuers, `missing Review issuer`);
   assert('Grant' in issuers, `missing Grant issuer`);
-  assert('Grant' in brands, `missing Grant brand`);
+  assert(channel, X`missing channel`);
+  assert(reviewer, X`missing reviewer`);
+  assert(supplier, X`missing supplier`);
 
   const grantPurse = E(issuers.Grant).makeEmptyPurse();
 
   const zoe = zcf.getZoeService();
 
+  const someReview = AmountMath.make(brands.Review, []);
   const someGrant = AmountMath.make(brands.Grant, []);
 
-  const { mint, issuer } = makeIssuerKit('Message', AssetKind.SET);
+  const { mint, issuer, brand } = makeIssuerKit('Message', AssetKind.SET);
   await zcf.saveIssuer(issuer, 'Message');
 
   const lookForRequests = async () => {
@@ -39,35 +45,52 @@ export const start = async (zcf) => {
     );
     if (!hasAddr) return;
 
-    await Promise.all(
+    await Promise.allSettled(
       hasAddr.map((requestMsg) => {
-        const proposal = harden({
-          give: { Request: [requestMsg] },
-          want: { Grant: someGrant },
-        });
-        const pmt = mint.mintPayment(proposal.give.Request);
-        const invitation = await E(supplier).getInvitation();
-        const seat = E(zoe).offer(
-          invitation,
-          proposal,
-          harden({ Request: pmt }),
-        );
-        await E(seat).getOfferResult();
-        const grant = E(seat).getPayout('Grant');
-        const grantAmt = await E(issuers.Grant).getAmountOf(grant);
-        if (AmountMath.isEmpty(grantAmt)) {
-          throw Error('empty grant!');
-        }
-        await E(grantPurse).deposit(grant);
+        const doReview = async () => {
+          const invitation = await E(reviewer).getReviewInvitation(requestMsg);
+          const proposal = harden({
+            give: { Request: AmountMath.make(brand, [requestMsg]) },
+            want: { Review: someReview },
+          });
+          const pmt = mint.mintPayment(proposal.give.Request);
+          const seat = E(zoe).offer(
+            invitation,
+            proposal,
+            harden({ Request: pmt }),
+          );
+          await E(seat).getOfferResult();
+          return E(seat).getPayout('Review');
+        };
+
+        /** @param {Payment} review */
+        const doGrant = async (review) => {
+          const invitation = await E(supplier).getGrantInvitation();
+          const reviewAmt = await E(issuers.Review).getAmountOf(review);
+          const proposal = harden({
+            give: { Review: reviewAmt },
+            want: { Grant: someGrant },
+          });
+          const seat = E(zoe).offer(
+            invitation,
+            proposal,
+            harden({ Review: review }),
+          );
+          await E(seat).getOfferResult();
+          const grant = E(seat).getPayout('Grant');
+          const grantAmt = await E(grantPurse).deposit(grant);
+          if (AmountMath.isEmpty(grantAmt)) {
+            throw Error('empty grant!');
+          }
+        };
+
+        const review = await doReview();
+        await doGrant(review);
         // TODO: createReaction in DiscordAPI
         return E(channel).createReaction(requestMsg.id, '🏁');
       }),
     );
   };
-
-  const pubicFacet = Far('ValidatorAdvocate', {
-    lookForRequests,
-  });
 
   const creatorFacet = Far('ValidatorAdvocateCreator', {
     withdrawGrants: () =>
@@ -76,5 +99,10 @@ export const start = async (zcf) => {
       ),
   });
 
-  return { pubicFacet, creatorFacet };
+  return {
+    pubicFacet: Far('ValidatorAdvocate', {
+      lookForRequests,
+    }),
+    creatorFacet,
+  };
 };
