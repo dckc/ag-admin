@@ -7,11 +7,10 @@
   "scripts": {
     "build": "exit 0",
     "test": "exit 0",
-    "lint": "eslint '**/*.{js,jsx}'",
-    "lint-fix": "eslint --fix '**/*.{js,jsx}'",
-    "lint-check": "eslint '**/*.{js,jsx}'",
-    "lint-fix-jessie": "eslint -c '.eslintrc-jessie.js' --fix '**/*.{js,jsx}'",
-    "lint-check-jessie": "eslint -c '.eslintrc-jessie.js' '**/*.{js,jsx}'"
+    "lint": "run-s --continue-on-error lint:*",
+    "lint-fix": "yarn lint:eslint --fix",
+    "lint:types": "tsc --maxNodeModuleJsDepth 3 -p jsconfig.json",
+    "lint:eslint": "eslint --ext .js,.ts ."
   },
   "devDependencies": {
     "eslint": "^7.32.0",
@@ -24,6 +23,9 @@
     "prettier": "^2.5.1"
   },
   "dependencies": {
+    "@agoric/wallet-backend": "^0.12.0",
+    "@agoric/store": "^0.7.1",
+    "@agoric/notifier": "^0.4.0",
     "google-spreadsheet": "*",
     "@endo/far": "*",
     "@endo/eventual-send": "^0.14.8",
