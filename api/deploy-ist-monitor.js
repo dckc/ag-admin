@@ -30,8 +30,49 @@ const forEachNotice = async (notifier, f) => {
   }
 };
 
+/**
+ * @param {Petname} n
+ * TODO: assert " not in simple names
+ */
+const fmtPetname = (n) => (typeof n === 'string' ? n : JSON.stringify(n));
+
+/**
+ *
+ * @param {string} table
+ * @param {string | number} key
+ * @param {Record<string, string | number>} record
+ */
 const mockUpsert = async (table, key, record) => {
   console.log(`${table}.upsert(`, key, record, ')');
+};
+
+/**
+ * @param {bigint} frac
+ * @param {number} exp
+ */
+const pad0 = (frac, exp) =>
+  `${`${'0'.repeat(exp)}${frac}`.slice(-exp)}`.replace(/0+$/, '');
+
+/** @param { bigint } whole */
+const separators = (whole) => {
+  const sep = '_';
+  // ack: https://stackoverflow.com/a/45950572/7963, https://regex101.com/
+  const revStr = (s) => s.split('').reverse().join('');
+  const lohi = revStr(`${whole}`);
+  const s = lohi.replace(/(?=\d{4})(\d{3})/g, (m, p1) => `${p1}${sep}`);
+  return revStr(s);
+};
+
+/**
+ * @param {bigint} n
+ * @param {number} exp
+ */
+const decimal = (n, exp) => {
+  const unit = 10n ** BigInt(exp);
+  const [whole, frac] = [n / unit, n % unit];
+  return frac !== 0n
+    ? `${separators(whole)}.${pad0(frac, exp)}`
+    : `${separators(whole)}`;
 };
 
 /**
@@ -46,40 +87,99 @@ const monitorIssuers = async (notifier) => {
     for (const [name, detail] of issuers) {
       mockUpsert('issuers', JSON.stringify([updateCount, name]), {
         updateCount,
-        name,
+        name: fmtPetname(name),
         issuerBoardId: detail.issuerBoardId,
         detail: `${q(detail)}`,
       });
     }
   });
+  /** @param {Brand} target */
+  const findRecord = (target) =>
+    issuers.find(([_petname, { brand }]) => brand === target);
+  /** @param {Brand[]} brands */
+  const brandNames = (brands) => brands.map((b) => findRecord(b)[0]);
+
   return harden({
     current: () => issuers,
+    /** @param {Brand[]} brands */
+    brandNames,
+    /**
+     * @param {Amount<'nat'>} amt
+     * @param {number} [defaultDecimals]
+     * @returns {string}
+     */
+    fmtAmount: (amt, defaultDecimals) => {
+      if (!amt) return '';
+      const { brand, value } = amt;
+      /** @type {typeof issuers} */
+      const [fallback] = [
+        ['?', { displayInfo: { decimalPlaces: defaultDecimals } }],
+      ];
+      const [
+        _name,
+        {
+          displayInfo: { decimalPlaces },
+        },
+      ] = findRecord(brand) || fallback;
+      return decimal(value, decimalPlaces);
+    },
   });
+};
+
+/**
+ * @param {ERef<XYKAMMPublicFacet>} ammPub
+ * @param {Brand} brand
+ * @param {ReturnType<typeof monitorIssuers>} issuersP
+ */
+const monitorPool = async (ammPub, brand, issuersP) => {
+  const issuers = await issuersP;
+  const subscription = await E(ammPub).getPoolMetrics(brand);
+  const notifier = makeNotifierFromAsyncIterable(subscription);
+
+  return forEachNotice(
+    notifier,
+    async ({ updateCount, value: { Central, Secondary, Liquidity } }) => {
+      console.log('monitorPool', {
+        updateCount,
+        value: { Central, Secondary, Liquidity },
+      });
+      const [name] = issuers.brandNames([brand]);
+      mockUpsert('pool', JSON.stringify([updateCount, name]), {
+        updateCount,
+        pool: fmtPetname(name),
+        Central: issuers.fmtAmount(Central),
+        Secondary: issuers.fmtAmount(Secondary),
+        Liquidity: issuers.fmtAmount({ brand: null, value: Liquidity }, 6),
+      });
+    },
+  );
 };
 
 /**
  *
  * @param {ERef<XYKAMMPublicFacet>} ammPub
- * @param {ReturnType<typeof monitorIssuers>} issuers
+ * @param {ReturnType<typeof monitorIssuers>} issuersP
  */
-const monitorPools = async (ammPub, issuers) => {
+const monitorPools = async (ammPub, issuersP) => {
+  const issuers = await issuersP;
   const subscription = await E(ammPub).getMetrics();
   const notifier = makeNotifierFromAsyncIterable(subscription);
+  const seen = new Set();
 
   return forEachNotice(
     notifier,
     async ({ updateCount, value: { XYK: brands } }) => {
       console.log('monitorPools', { updateCount });
-      const current = await E(issuers).current();
-      const names = brands.map(
-        (target) =>
-          current.find(([_petname, { brand }]) => brand === target)[0],
-      );
-      for (const name of names) {
+      for (const brand of brands) {
+        const [name] = issuers.brandNames([brand]);
         mockUpsert('pools', JSON.stringify([updateCount, name]), {
           updateCount,
-          brand: name,
+          brand: fmtPetname(name),
         });
+        if (!seen.has(brand)) {
+          monitorPool(ammPub, brand, issuersP);
+          seen.add(brand);
+        }
       }
     },
   );
@@ -118,14 +218,6 @@ const monitorIST = async (homeP, { lookup }) => {
 };
 harden(monitorIST);
 
-// command[11] E(home.wallet).getBridge().then(x => wb=x)
-// history[11] [Object Alleged: preapprovedBridge]{}
-// command[12] E(wb).getIssuers()
-// history[12] Promise.reject("TypeError: target has no method \"getIssuers\", has [\"addOffer\",\"getAgoricNames\",\"getBoard\",\"getBrandPetnames\",\"getDepositFacetId\",\"getIssuersNotifier\",\"getNamesByAddress\",\"getOffersNotifier\",\"getPublicNotifiers\",\"getPursesNotifier\",\"getUINotifier\",\"getZoe\",\"suggestInstallation\",\"suggestInstance\",\"suggestIssuer\"]")
-// command[13] E(E(wb).getIssuersNotifier()).getUpdateSince()
-// history[13] {"updateCount":10,"value":[["AUSD",{"assetKind":"nat","brand":[Object Alleged: AUSD brand]{},"displayInfo":{"assetKind":"nat","decimalPlaces":6},"issuer":[Object Alleged: AUSD issuer]{},"issuerBoardId":"board04016","meta":{"creationStamp":1653337291420,"id":10,"updatedStamp":1653337291420}}],["BLD",{"assetKind":"nat","brand":[Object Alleged: BLD brand]{},"displayInfo":{"assetKind":"nat","decimalPlaces":6},"issuer":[Object Alleged: BLD issuer]{},"issuerBoardId":"board00613","meta":{"creationStamp":1653337291420,"id":7,"updatedStamp":1653337291420}}],["IbcATOM",{"assetKind":"nat","brand":[Object Alleged: IbcATOM brand]{},"displayInfo":{"assetKind":"nat","decimalPlaces":4},"issuer":[Object Alleged: IbcATOM issuer]{},"issuerBoardId":"board02314","meta":{"creationStamp":1653337291420,"id":9,"updatedStamp":1653337291420}}],["RUN",{"assetKind":"nat","brand":[Object Alleged: RUN brand]{},"displayInfo":{"assetKind":"nat","decimalPlaces":6},"issuer":[Object Alleged: RUN issuer]{},"issuerBoardId":"board0223","meta":{"creationStamp":1653337291420,"id":8,"updatedStamp":1653337291420}}],["zoe invite",{"assetKind":"set","brand":[Object Alleged: Zoe Invitation brand]{},"displayInfo":{"assetKind":"set"},"issuer":[Object Alleged: Zoe Invitation issuer]{},"issuerBoardId":"board04312","meta":{"creationStamp":1653337291420,"id":1,"updatedStamp":1653337291420}}]]}
-// command[14] (h=history),null
-// history[14] null
 // command[15] Object.fromEntries(h[13].value).AUSD
 // history[15] {"assetKind":"nat","brand":[Object Alleged: AUSD brand]{},"displayInfo":{"assetKind":"nat","decimalPlaces":6},"issuer":[Object Alleged: AUSD issuer]{},"issuerBoardId":"board04016","meta":{"creationStamp":1653337291420,"id":10,"updatedStamp":1653337291420}}
 // command[16] AUSD=h[15]
@@ -152,14 +244,7 @@ harden(monitorIST);
 // history[26] [Object Alleged: AUSDLiquidity issuer]{}
 // command[27] E(amm.iter).next()
 // history[27] {"done":false,"value":{"XYK":[[Object Alleged: IbcATOM brand]{}]}}
-// command[28] E(amm.pub).getPoolMetrics(tok.AUSD.brand)
-// history[28] [Object Alleged: Subscription]{}
-// command[29] E(h[28])[Symbol.iterator]()
-// history[29] Promise.reject("TypeError: target has no method \"[Symbol(Symbol.iterator)]\", has [\"[Symbol(Symbol.asyncIterator)]\",\"getSharableSubscriptionInternals\"]")
-// command[30] E(h[28])[Symbol.asyncIterator]()
-// history[30] [Object Alleged: SubscriptionIterator]{}
-// command[31] E(h[30]).next()
-// history[31] {"done":false,"value":{"Central":{"brand":[Object Alleged: RUN brand]{},"value":0n},"Liquidity":0n,"Secondary":{"brand":[Object Alleged: AUSD brand]{},"value":0n}}}
+
 // command[32] proposal = {give: {Central: mk(tok.RUN, 50n), Secondary: mk(tok.AUSD, 50n)}, want: { Liquidity: mk(ALiq, 0n) }}
 // history[32] exception: [TypeError: mk: cannot coerce undefined to object]
 // command[33] E(h[26]).getBrand().then(b => ALiq=({brand:b}))
@@ -186,7 +271,5 @@ harden(monitorIST);
 // history[43] [Object Alleged: userSeat]{}
 // command[44] E(seat).getOfferResult()
 // history[44] "Added liquidity."
-// command[45] E(h[30]).next()
-// history[45] {"done":false,"value":{"Central":{"brand":[Object Alleged: RUN brand]{},"value":50000000n},"Liquidity":50000000n,"Secondary":{"brand":[Object Alleged: AUSD brand]{},"value":50000000n}}}
 
 export default monitorIST;
