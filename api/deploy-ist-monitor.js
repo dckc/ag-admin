@@ -37,12 +37,16 @@ const forEachNotice = async (notifier, f) => {
 const fmtPetname = (n) => (typeof n === 'string' ? n : JSON.stringify(n));
 
 /**
- *
  * @param {string} table
- * @param {string | number} key
- * @param {Record<string, string | number>} record
+ * @param {string | string[]} key
+ * @param {Record<string, string | number>} detail
  */
-const mockUpsert = async (table, key, record) => {
+const mockUpsert = async (table, key, detail) => {
+  const keyVal =
+    typeof key === 'string'
+      ? detail[key]
+      : JSON.stringify(key.map((col) => detail[col]));
+  const record = typeof key === 'string' ? detail : { Key: keyVal, ...detail };
   console.log(`${table}.upsert(`, key, record, ')');
 };
 
@@ -85,7 +89,7 @@ const monitorIssuers = async (notifier) => {
   forEachNotice(notifier, ({ updateCount, value }) => {
     issuers = value;
     for (const [name, detail] of issuers) {
-      mockUpsert('issuers', JSON.stringify([updateCount, name]), {
+      mockUpsert('issuers', ['updateCount', 'name'], {
         updateCount,
         name: fmtPetname(name),
         issuerBoardId: detail.issuerBoardId,
@@ -157,7 +161,7 @@ const monitorPool = async (ammPub, brand, issuersP) => {
           displayInfo: { decimalPlaces },
         },
       ] = issuers.findRecord(Central.brand);
-      mockUpsert('pool', JSON.stringify([updateCount, name]), {
+      mockUpsert('pool', ['updateCount', 'name'], {
         updateCount,
         pool: fmtPetname(name),
         Central: issuers.fmtAmount(Central),
@@ -185,7 +189,7 @@ const monitorPools = async (ammPub, issuersP) => {
       console.log('monitorPools', { updateCount });
       for (const brand of brands) {
         const [name] = issuers.brandNames([brand]);
-        mockUpsert('pools', JSON.stringify([updateCount, name]), {
+        mockUpsert('pools', ['updateCount', 'name'], {
           updateCount,
           brand: fmtPetname(name),
         });
