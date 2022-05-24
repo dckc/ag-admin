@@ -99,30 +99,37 @@ const monitorIssuers = async (notifier) => {
   /** @param {Brand[]} brands */
   const brandNames = (brands) => brands.map((b) => findRecord(b)[0]);
 
+  /**
+   * @param {bigint} value
+   * @param {number} decimalPlaces
+   * @returns {string}
+   */
+  const fmtValue = (value, decimalPlaces) => {
+    if (!value) return '';
+    return decimal(value, decimalPlaces);
+  };
+  /**
+   * @param {Amount<'nat'>} amt
+   * @returns {string}
+   */
+  const fmtAmount = (amt) => {
+    if (!amt) return '';
+    const { brand, value } = amt;
+    const [
+      _name,
+      {
+        displayInfo: { decimalPlaces },
+      },
+    ] = findRecord(brand);
+    return decimal(value, decimalPlaces);
+  };
+
   return harden({
     current: () => issuers,
-    /** @param {Brand[]} brands */
     brandNames,
-    /**
-     * @param {Amount<'nat'>} amt
-     * @param {number} [defaultDecimals]
-     * @returns {string}
-     */
-    fmtAmount: (amt, defaultDecimals) => {
-      if (!amt) return '';
-      const { brand, value } = amt;
-      /** @type {typeof issuers} */
-      const [fallback] = [
-        ['?', { displayInfo: { decimalPlaces: defaultDecimals } }],
-      ];
-      const [
-        _name,
-        {
-          displayInfo: { decimalPlaces },
-        },
-      ] = findRecord(brand) || fallback;
-      return decimal(value, decimalPlaces);
-    },
+    findRecord,
+    fmtAmount,
+    fmtValue,
   });
 };
 
@@ -144,12 +151,18 @@ const monitorPool = async (ammPub, brand, issuersP) => {
         value: { Central, Secondary, Liquidity },
       });
       const [name] = issuers.brandNames([brand]);
+      const [
+        _n,
+        {
+          displayInfo: { decimalPlaces },
+        },
+      ] = issuers.findRecord(Central.brand);
       mockUpsert('pool', JSON.stringify([updateCount, name]), {
         updateCount,
         pool: fmtPetname(name),
         Central: issuers.fmtAmount(Central),
         Secondary: issuers.fmtAmount(Secondary),
-        Liquidity: issuers.fmtAmount({ brand: null, value: Liquidity }, 6),
+        Liquidity: issuers.fmtValue(Liquidity, decimalPlaces),
       });
     },
   );
