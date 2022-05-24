@@ -37,17 +37,19 @@ const forEachNotice = async (notifier, f) => {
 const fmtPetname = (n) => (typeof n === 'string' ? n : JSON.stringify(n));
 
 /**
- * @param {string} table
+ * @param {ERef<Worksheet>} sheetP
  * @param {string | string[]} key
  * @param {Record<string, string | number>} detail
  */
-const mockUpsert = async (table, key, detail) => {
+const upsertKey = async (sheetP, key, detail) => {
   const keyVal =
     typeof key === 'string'
       ? detail[key]
       : JSON.stringify(key.map((col) => detail[col]));
   const record = typeof key === 'string' ? detail : { Key: keyVal, ...detail };
-  console.log(`${table}.upsert(`, key, record, ')');
+  const sheet = await sheetP;
+  console.log(`${sheet}.upsert(`, keyVal, record, ')');
+  return E(sheet).upsert(keyVal, record);
 };
 
 /**
@@ -80,23 +82,25 @@ const decimal = (n, exp) => {
 };
 
 /**
- *
  * @param {ReturnType<WalletBridge['getIssuersNotifier']>} notifier
+ * @param {ERef<Worksheet>} sheet
  */
-const monitorIssuers = async (notifier) => {
+const monitorIssuers = async (notifier, sheet) => {
   const first = await E(notifier).getUpdateSince();
   let issuers = first.value;
+
+  // runs in "background"
   forEachNotice(notifier, ({ updateCount, value }) => {
     issuers = value;
     for (const [name, detail] of issuers) {
-      mockUpsert('issuers', ['updateCount', 'name'], {
+      upsertKey(sheet, ['updateCount', 'name'], {
         updateCount,
         name: fmtPetname(name),
         issuerBoardId: detail.issuerBoardId,
         detail: `${q(detail)}`,
-      });
+      }).catch(console.error);
     }
-  });
+  }).catch(console.error);
   /** @param {Brand} target */
   const findRecord = (target) =>
     issuers.find(([_petname, { brand }]) => brand === target);
@@ -141,8 +145,9 @@ const monitorIssuers = async (notifier) => {
  * @param {ERef<XYKAMMPublicFacet>} ammPub
  * @param {Brand} brand
  * @param {ReturnType<typeof monitorIssuers>} issuersP
+ * @param {ERef<Worksheet>} sheet
  */
-const monitorPool = async (ammPub, brand, issuersP) => {
+const monitorPool = async (ammPub, brand, issuersP, sheet) => {
   const issuers = await issuersP;
   const subscription = await E(ammPub).getPoolMetrics(brand);
   const notifier = makeNotifierFromAsyncIterable(subscription);
@@ -161,7 +166,7 @@ const monitorPool = async (ammPub, brand, issuersP) => {
           displayInfo: { decimalPlaces },
         },
       ] = issuers.findRecord(Central.brand);
-      mockUpsert('pool', ['updateCount', 'name'], {
+      upsertKey(sheet, ['updateCount', 'pool'], {
         updateCount,
         pool: fmtPetname(name),
         Central: issuers.fmtAmount(Central),
@@ -176,8 +181,9 @@ const monitorPool = async (ammPub, brand, issuersP) => {
  *
  * @param {ERef<XYKAMMPublicFacet>} ammPub
  * @param {ReturnType<typeof monitorIssuers>} issuersP
+ * @param {ReturnType<getSheets>} sheets
  */
-const monitorPools = async (ammPub, issuersP) => {
+const monitorPools = async (ammPub, issuersP, sheets) => {
   const issuers = await issuersP;
   const subscription = await E(ammPub).getMetrics();
   const notifier = makeNotifierFromAsyncIterable(subscription);
@@ -189,17 +195,29 @@ const monitorPools = async (ammPub, issuersP) => {
       console.log('monitorPools', { updateCount });
       for (const brand of brands) {
         const [name] = issuers.brandNames([brand]);
-        mockUpsert('pools', ['updateCount', 'name'], {
+        upsertKey(sheets.pools, ['updateCount', 'brand'], {
           updateCount,
           brand: fmtPetname(name),
         });
         if (!seen.has(brand)) {
-          monitorPool(ammPub, brand, issuersP);
+          monitorPool(ammPub, brand, issuersP, sheets.swaps);
           seen.add(brand);
         }
       }
     },
   );
+};
+
+/** @param {ERef<MapStore<string, unknown>>} scratch */
+const getSheets = (scratch) => {
+  /** @type {Workbook} */
+  const workbook = /** @type {any} */ (E(scratch).get('workbook1'));
+  const sheets = {
+    issuers: E(workbook).sheetByIndex(1),
+    pools: E(workbook).sheetByIndex(2),
+    swaps: E(workbook).sheetByIndex(3),
+  };
+  return sheets;
 };
 
 /**
@@ -214,12 +232,19 @@ const monitorPools = async (ammPub, issuersP) => {
  *   zoe: ERef<ZoeService>,
  *   scratch: ERef<MapStore<string, unknown>>,
  * }} Home
+ *
+ * @typedef {typeof import('./src/plugin-sheets').bootPlugin} SheetPlugin
+ * @typedef {ReturnType<Awaited<ReturnType<SheetPlugin>>['start']>} Workbook
+ * @typedef {ReturnType<Awaited<Workbook>['sheetByIndex']>} Worksheet
  */
 const monitorIST = async (homeP, { lookup }) => {
-  const { wallet, zoe } = E.get(homeP);
+  const { wallet, zoe, scratch } = E.get(homeP);
   const bridge = E(wallet).getBridge();
-  const issuers = monitorIssuers(E(bridge).getIssuersNotifier());
-
+  const sheets = getSheets(scratch);
+  const issuers = monitorIssuers(
+    E(bridge).getIssuersNotifier(),
+    sheets.issuers,
+  );
   /** @type {ERef<Instance>} */
   const ammInstanceP = /** @type {any} */ (
     E(lookup)('agoricNames', 'instance', 'amm')
@@ -229,7 +254,7 @@ const monitorIST = async (homeP, { lookup }) => {
     E(zoe).getPublicFacet(ammInstanceP)
   );
 
-  await monitorPools(ammPub, issuers);
+  await monitorPools(ammPub, issuers, sheets);
 
   // history[10] {"done":false,"value":{"XYK":[]}}
 };
