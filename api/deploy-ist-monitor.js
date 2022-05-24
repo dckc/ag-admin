@@ -1,12 +1,89 @@
 // @ts-check
 import { E } from '@endo/far';
-import { makeSubscription } from '@agoric/notifier';
+import { makeNotifierFromAsyncIterable } from '@agoric/notifier';
 
 import '@agoric/store';
 import '@agoric/wallet-backend/exported.js'; // for WalletUser
 import '@agoric/zoe/exported.js'; // for ZoeService
 
+const { quote: q } = assert;
+
 /** @template T @typedef {import('@endo/eventual-send').ERef<T>} ERef */
+/** @typedef {typeof import('@agoric/run-protocol/src/vpool-xyk-amm/multipoolMarketMaker.js').start} XYKAMMContractStart */
+/** @typedef {Awaited<ReturnType<XYKAMMContractStart>>['publicFacet']} XYKAMMPublicFacet */
+
+/**
+ * @param {ERef<Notifier<T>>} notifier
+ * @param {(update: {updateCount: number|undefined, value: T}) => void} f
+ * @template T
+ */
+const forEachNotice = async (notifier, f) => {
+  for (let updateCount; ; ) {
+    // eslint-disable-next-line no-await-in-loop
+    const update = await E(notifier).getUpdateSince(updateCount);
+    // eslint-disable-next-line no-await-in-loop
+    await f(update);
+    updateCount = update.updateCount;
+    if (updateCount === undefined) {
+      return;
+    }
+  }
+};
+
+const mockUpsert = async (table, key, record) => {
+  console.log(`${table}.upsert(`, key, record, ')');
+};
+
+/**
+ *
+ * @param {ReturnType<WalletBridge['getIssuersNotifier']>} notifier
+ */
+const monitorIssuers = async (notifier) => {
+  const first = await E(notifier).getUpdateSince();
+  let issuers = first.value;
+  forEachNotice(notifier, ({ updateCount, value }) => {
+    issuers = value;
+    for (const [name, detail] of issuers) {
+      mockUpsert('issuers', JSON.stringify([updateCount, name]), {
+        updateCount,
+        name,
+        issuerBoardId: detail.issuerBoardId,
+        detail: `${q(detail)}`,
+      });
+    }
+  });
+  return harden({
+    current: () => issuers,
+  });
+};
+
+/**
+ *
+ * @param {ERef<XYKAMMPublicFacet>} ammPub
+ * @param {ReturnType<typeof monitorIssuers>} issuers
+ */
+const monitorPools = async (ammPub, issuers) => {
+  const subscription = await E(ammPub).getMetrics();
+  const notifier = makeNotifierFromAsyncIterable(subscription);
+
+  return forEachNotice(
+    notifier,
+    async ({ updateCount, value: { XYK: brands } }) => {
+      console.log('monitorPools', { updateCount });
+      const current = await E(issuers).current();
+      const names = brands.map(
+        (target) =>
+          current.find(([_petname, { brand }]) => brand === target)[0],
+      );
+      for (const name of names) {
+        mockUpsert('pools', JSON.stringify([updateCount, name]), {
+          updateCount,
+          brand: name,
+        });
+      }
+    },
+  );
+};
 
 /**
  *
@@ -23,17 +100,20 @@ import '@agoric/zoe/exported.js'; // for ZoeService
  */
 const monitorIST = async (homeP, { lookup }) => {
   const { wallet, zoe } = E.get(homeP);
-  // const bridge = E(wallet).getBridge();
-  const ammInstanceP = E(lookup)('agoricNames', 'instance', 'amm');
-  const ammPub = E(zoe).getPublicFacet(ammInstanceP);
+  const bridge = E(wallet).getBridge();
+  const issuers = monitorIssuers(E(bridge).getIssuersNotifier());
 
-  const ammSub = E(ammPub).getMetrics();
-  console.log({ ammSub });
-  const ammIter = E(ammSub)[Symbol.asyncIterator]();
-  const iter = makeSubscription(E(ammSub).getSharableSubscriptionInternals());
-  for await (const state of iter) {
-    console.log(state);
-  }
+  /** @type {ERef<Instance>} */
+  const ammInstanceP = /** @type {any} */ (
+    E(lookup)('agoricNames', 'instance', 'amm')
+  );
+
+  const ammPub = /** @type {ERef<XYKAMMPublicFacet>} */ (
+    E(zoe).getPublicFacet(ammInstanceP)
+  );
+
+  await monitorPools(ammPub, issuers);
+
   // history[10] {"done":false,"value":{"XYK":[]}}
 };
 harden(monitorIST);
