@@ -55,7 +55,7 @@ const pad0 = (frac, exp) =>
 
 /** @param { bigint } whole */
 const separators = (whole) => {
-  const sep = '_';
+  const sep = ',';
   // ack: https://stackoverflow.com/a/45950572/7963, https://regex101.com/
   const revStr = (s) => s.split('').reverse().join('');
   const lohi = revStr(`${whole}`);
