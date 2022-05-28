@@ -152,29 +152,27 @@ const monitorPool = async (ammPub, brand, issuersP, sheet) => {
   const subscription = await E(ammPub).getPoolMetrics(brand);
   const notifier = makeNotifierFromAsyncIterable(subscription);
 
-  return forEachNotice(
-    notifier,
-    async ({ updateCount, value: { Central, Secondary, Liquidity } }) => {
-      console.log('monitorPool', {
-        updateCount,
-        value: { Central, Secondary, Liquidity },
-      });
-      const [name] = issuers.brandNames([brand]);
-      const [
-        _n,
-        {
-          displayInfo: { decimalPlaces },
-        },
-      ] = issuers.findRecord(Central.brand);
-      upsertKey(sheet, ['updateCount', 'pool'], {
-        updateCount,
-        pool: fmtPetname(name),
-        Central: issuers.fmtAmount(Central),
-        Secondary: issuers.fmtAmount(Secondary),
-        Liquidity: issuers.fmtValue(Liquidity, decimalPlaces),
-      });
-    },
-  );
+  return forEachNotice(notifier, async ({ updateCount, value }) => {
+    console.log('monitorPool', {
+      updateCount,
+      value,
+    });
+    const { centralAmount, secondaryAmount, liquidityTokens } = value;
+    const [name] = issuers.brandNames([brand]);
+    const [
+      _n,
+      {
+        displayInfo: { decimalPlaces },
+      },
+    ] = issuers.findRecord(centralAmount.brand);
+    upsertKey(sheet, ['updateCount', 'pool'], {
+      updateCount,
+      pool: fmtPetname(name),
+      Central: issuers.fmtAmount(centralAmount),
+      Secondary: issuers.fmtAmount(secondaryAmount),
+      Liquidity: issuers.fmtValue(liquidityTokens, decimalPlaces),
+    });
+  });
 };
 
 /**
