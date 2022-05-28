@@ -9,6 +9,9 @@ import '@agoric/zoe/exported.js'; // for ZoeService
 const { quote: q } = assert;
 
 /** @template T @typedef {import('@endo/eventual-send').ERef<T>} ERef */
+/** @typedef {import('@agoric/run-protocol/src/vaultFactory/vaultFactory.js').start} VaultFactoryStart */
+/** @typedef {Awaited<ReturnType<VaultFactoryStart>>['publicFacet']} VaultFactoryPublicFacet */
+
 /** @typedef {typeof import('@agoric/run-protocol/src/vpool-xyk-amm/multipoolMarketMaker.js').start} XYKAMMContractStart */
 /** @typedef {Awaited<ReturnType<XYKAMMContractStart>>['publicFacet']} XYKAMMPublicFacet */
 
@@ -206,6 +209,81 @@ const monitorPools = async (ammPub, issuersP, sheets) => {
   );
 };
 
+// const exVal = {
+//   numLiquidationsCompleted: 0,
+//   numVaults: 0,
+//   totalCollateral: { brand: b0, value: 0n },
+//   totalCollateralSold: { brand: b0, value: 0n },
+//   totalDebt: { brand: b0, value: 0n },
+//   totalOverageReceived: { brand: b0, value: 0n },
+//   totalProceedsReceived: { brand: b0, value: 0n },
+//   totalShortfallReceived: { brand: b, value: 0n },
+// };
+
+const { entries, fromEntries } = Object;
+
+const mapvalues = (obj, f) =>
+  fromEntries(entries(obj).map(([k, v]) => [k, f(v)]));
+
+/**
+ * @param {ERef<VaultFactoryPublicFacet>} vaultPub
+ * @param {Brand} brand
+ * @param {ReturnType<typeof monitorIssuers>} issuersP
+ * @param {ERef<Worksheet>} sheet
+ */
+const monitorCollateral = async (vaultPub, brand, issuersP, sheet) => {
+  const issuers = await issuersP;
+  const subscription = await E(
+    E(vaultPub).getCollateralManager(brand),
+  ).getMetrics();
+  const notifier = makeNotifierFromAsyncIterable(subscription);
+
+  return forEachNotice(notifier, async ({ updateCount, value }) => {
+    console.log('monitorCollateral', {
+      updateCount,
+      value,
+    });
+    const { numVaults, numLiquidationsCompleted, ...amounts } = value;
+    const [name] = issuers.brandNames([brand]);
+    upsertKey(sheet, ['updateCount', 'collateral'], {
+      updateCount,
+      collateral: fmtPetname(name),
+      numVaults,
+      numLiquidationsCompleted,
+      ...mapvalues(amounts, issuers.fmtAmount),
+    });
+  });
+};
+
+/**
+ * @param {ERef<VaultFactoryPublicFacet>} vaultPub
+ * @param {ReturnType<typeof monitorIssuers>} issuersP
+ * @param {ReturnType<getSheets>} sheets
+ */
+const monitorVaultFactory = async (vaultPub, issuersP, sheets) => {
+  const issuers = await issuersP;
+  const subscription = await E(vaultPub).getMetrics();
+  const notifier = makeNotifierFromAsyncIterable(subscription);
+  const seen = new Set();
+
+  return forEachNotice(notifier, async ({ updateCount, value }) => {
+    console.log('monitorVaultFactory', { updateCount, value });
+    const { collaterals, rewardPoolAllocation } = value;
+    for (const collateral of collaterals) {
+      const [name] = issuers.brandNames([collateral]);
+      upsertKey(sheets.collaterals, ['updateCount', 'collateral'], {
+        updateCount,
+        collateral: fmtPetname(name),
+        rewardPoolAllocation: `${q(rewardPoolAllocation)}`,
+      });
+      if (!seen.has(collateral)) {
+        monitorCollateral(vaultPub, collateral, issuersP, sheets.vaults);
+        seen.add(collateral);
+      }
+    }
+  });
+};
+
 /** @param {ERef<MapStore<string, unknown>>} scratch */
 const getSheets = (scratch) => {
   /** @type {Workbook} */
@@ -214,6 +292,8 @@ const getSheets = (scratch) => {
     issuers: E(workbook).sheetByIndex(1),
     pools: E(workbook).sheetByIndex(2),
     swaps: E(workbook).sheetByIndex(3),
+    collaterals: E(workbook).sheetByIndex(4),
+    vaults: E(workbook).sheetByIndex(5),
   };
   return sheets;
 };
@@ -222,7 +302,7 @@ const getSheets = (scratch) => {
  *
  * @param {ERef<Home>} homeP
  * @param {{
- *   lookup: (...parts: string[]) => ERef<unknown>,
+ *   lookup: (...parts: string[]) => ERef<any>,
  * }} _endowments
  *
  * @typedef {{
@@ -243,16 +323,20 @@ const monitorIST = async (homeP, { lookup }) => {
     E(bridge).getIssuersNotifier(),
     sheets.issuers,
   );
-  /** @type {ERef<Instance>} */
-  const ammInstanceP = /** @type {any} */ (
-    E(lookup)('agoricNames', 'instance', 'amm')
-  );
+  /** @type {(name: string) => Promise<Instance>} */
+  const getInstance = (name) => E(lookup)('agoricNames', 'instance', name);
+  const ammInstanceP = getInstance('amm');
+  const vaultInstanceP = getInstance('VaultFactory');
 
-  const ammPub = /** @type {ERef<XYKAMMPublicFacet>} */ (
-    E(zoe).getPublicFacet(ammInstanceP)
-  );
+  /** @type {ERef<XYKAMMPublicFacet>} */
+  const ammPub = E(zoe).getPublicFacet(ammInstanceP);
+  /** @type {ERef<VaultFactoryPublicFacet>} */
+  const vaultPub = E(zoe).getPublicFacet(vaultInstanceP);
 
-  await monitorPools(ammPub, issuers, sheets);
+  await Promise.all([
+    monitorPools(ammPub, issuers, sheets),
+    monitorVaultFactory(vaultPub, issuers, sheets),
+  ]);
 
   // history[10] {"done":false,"value":{"XYK":[]}}
 };
