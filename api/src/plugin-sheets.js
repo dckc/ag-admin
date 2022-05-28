@@ -40,24 +40,32 @@ export const bootPlugin = () => {
 
       assert.typeof(credentials, 'object');
       await doc.useServiceAccountAuth(credentials);
-      await doc.loadInfo(); // loads document properties and worksheets
-      console.log({ title: doc.title, sheetId });
 
+      const makeSheet = (sheet) =>
+        Far('GoogleSpreadsheetWorksheet', {
+          lookup: async (key) => {
+            assertKey(key);
+            const row = await lookup(sheet, key);
+            return toData(row);
+          },
+          upsert: async (key, record) => {
+            assertKey(key);
+            const row = await upsert(sheet, key, record);
+            return toData(row);
+          },
+        });
       return Far('GoogleSpreadsheet', {
-        sheetByIndex: (ix) => {
-          const sheet = doc.sheetsByIndex[ix];
-          return Far('GoogleSpreadsheetWorksheet', {
-            lookup: async (key) => {
-              assertKey(key);
-              const row = await lookup(sheet, key);
-              return toData(row);
-            },
-            upsert: async (key, record) => {
-              assertKey(key);
-              const row = await upsert(sheet, key, record);
-              return toData(row);
-            },
-          });
+        sheetByIndex: async (ix) => {
+          await doc.loadInfo(); // loads document properties and worksheets
+          console.log({ title: doc.title, sheetId });
+
+          return makeSheet(doc.sheetsByIndex[ix]);
+        },
+        sheetByTitle: async (title) => {
+          await doc.loadInfo();
+          console.log({ title: doc.title, sheetId });
+
+          return makeSheet(doc.sheetsByTitle[title]);
         },
       });
     },
