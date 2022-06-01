@@ -54,7 +54,7 @@ export const installPlugins = async (
     });
     console.log({ sheetsPluginRoot: doc });
     await E(scratch).set(key, doc);
-    const sheet = E(doc).sheetByIndex(0);
+    const sheet = E(doc).sheetByTitle('players');
     const row = await E(sheet).lookup('Pete Rose');
     console.log({ row });
   }
