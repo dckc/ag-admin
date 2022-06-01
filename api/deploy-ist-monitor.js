@@ -173,7 +173,7 @@ const monitorPool = async (ammPub, brand, issuersP, sheet) => {
       pool: fmtPetname(name),
       Central: issuers.fmtAmount(centralAmount),
       Secondary: issuers.fmtAmount(secondaryAmount),
-      Liquidity: issuers.fmtValue(liquidityTokens, decimalPlaces),
+      Liquidity: issuers.fmtValue(liquidityTokens.value, decimalPlaces),
     });
   });
 };
@@ -289,11 +289,11 @@ const getSheets = (scratch) => {
   /** @type {Workbook} */
   const workbook = /** @type {any} */ (E(scratch).get('workbook1'));
   const sheets = {
-    issuers: E(workbook).sheetByIndex(1),
-    pools: E(workbook).sheetByIndex(2),
-    swaps: E(workbook).sheetByIndex(3),
-    collaterals: E(workbook).sheetByIndex(4),
-    vaults: E(workbook).sheetByIndex(5),
+    issuers: E(workbook).sheetByTitle('issuers'),
+    pools: E(workbook).sheetByTitle('pools'),
+    swaps: E(workbook).sheetByTitle('swaps'),
+    collaterals: E(workbook).sheetByTitle('collaterals'),
+    vaults: E(workbook).sheetByTitle('vaults'),
   };
   return sheets;
 };
