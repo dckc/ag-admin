@@ -56,33 +56,11 @@ const upsertKey = async (sheetP, key, detail) => {
 };
 
 /**
- * @param {bigint} frac
- * @param {number} exp
- */
-const pad0 = (frac, exp) =>
-  `${`${'0'.repeat(exp)}${frac}`.slice(-exp)}`.replace(/0+$/, '');
-
-/** @param { bigint } whole */
-const separators = (whole) => {
-  const sep = ',';
-  // ack: https://stackoverflow.com/a/45950572/7963, https://regex101.com/
-  const revStr = (s) => s.split('').reverse().join('');
-  const lohi = revStr(`${whole}`);
-  const s = lohi.replace(/(?=\d{4})(\d{3})/g, (m, p1) => `${p1}${sep}`);
-  return revStr(s);
-};
-
-/**
  * @param {bigint} n
  * @param {number} exp
+ * @returns {number}
  */
-const decimal = (n, exp) => {
-  const unit = 10n ** BigInt(exp);
-  const [whole, frac] = [n / unit, n % unit];
-  return frac !== 0n
-    ? `${separators(whole)}.${pad0(frac, exp)}`
-    : `${separators(whole)}`;
-};
+const decimal = (n, exp) => Number(n) / 10 ** exp;
 
 /**
  * @param {ReturnType<WalletBridge['getIssuersNotifier']>} notifier
@@ -113,18 +91,18 @@ const monitorIssuers = async (notifier, sheet) => {
   /**
    * @param {bigint} value
    * @param {number} decimalPlaces
-   * @returns {string}
+   * @returns {number}
    */
   const fmtValue = (value, decimalPlaces) => {
-    if (!value) return '';
+    if (!value) return NaN;
     return decimal(value, decimalPlaces);
   };
   /**
    * @param {Amount<'nat'>} amt
-   * @returns {string}
+   * @returns {number}
    */
   const fmtAmount = (amt) => {
-    if (!amt) return '';
+    if (!amt) return NaN;
     const { brand, value } = amt;
     const [
       _name,
