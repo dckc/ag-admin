@@ -65,8 +65,9 @@ const decimal = (n, exp) => Number(n) / 10 ** exp;
 /**
  * @param {ReturnType<WalletBridge['getIssuersNotifier']>} notifier
  * @param {ERef<Worksheet>} sheet
+ * @param {() => Date} clock
  */
-const monitorIssuers = async (notifier, sheet) => {
+const monitorIssuers = async (notifier, sheet, clock) => {
   const first = await E(notifier).getUpdateSince();
   let issuers = first.value;
 
@@ -79,6 +80,7 @@ const monitorIssuers = async (notifier, sheet) => {
         name: fmtPetname(name),
         issuerBoardId: detail.issuerBoardId,
         detail: `${q(detail)}`,
+        insertedAt: clock().toISOString(),
       }).catch(console.error);
     }
   }).catch(console.error);
@@ -127,8 +129,9 @@ const monitorIssuers = async (notifier, sheet) => {
  * @param {Brand} brand
  * @param {ReturnType<typeof monitorIssuers>} issuersP
  * @param {ERef<Worksheet>} sheet
+ * @param {() => Date} clock
  */
-const monitorPool = async (ammPub, brand, issuersP, sheet) => {
+const monitorPool = async (ammPub, brand, issuersP, sheet, clock) => {
   const issuers = await issuersP;
   const subscription = await E(ammPub).getPoolMetrics(brand);
   const notifier = makeNotifierFromAsyncIterable(subscription);
@@ -152,6 +155,7 @@ const monitorPool = async (ammPub, brand, issuersP, sheet) => {
       Central: issuers.fmtAmount(centralAmount),
       Secondary: issuers.fmtAmount(secondaryAmount),
       Liquidity: issuers.fmtValue(liquidityTokens.value, decimalPlaces),
+      insertedAt: clock().toISOString(),
     });
   });
 };
@@ -161,8 +165,9 @@ const monitorPool = async (ammPub, brand, issuersP, sheet) => {
  * @param {ERef<XYKAMMPublicFacet>} ammPub
  * @param {ReturnType<typeof monitorIssuers>} issuersP
  * @param {ReturnType<getSheets>} sheets
+ * @param {() => Date} clock
  */
-const monitorPools = async (ammPub, issuersP, sheets) => {
+const monitorPools = async (ammPub, issuersP, sheets, clock) => {
   const issuers = await issuersP;
   const subscription = await E(ammPub).getMetrics();
   const notifier = makeNotifierFromAsyncIterable(subscription);
@@ -177,9 +182,10 @@ const monitorPools = async (ammPub, issuersP, sheets) => {
         upsertKey(sheets.pools, ['updateCount', 'brand'], {
           updateCount,
           brand: fmtPetname(name),
+          insertedAt: clock().toISOString(),
         });
         if (!seen.has(brand)) {
-          monitorPool(ammPub, brand, issuersP, sheets.swaps);
+          monitorPool(ammPub, brand, issuersP, sheets.swaps, clock);
           seen.add(brand);
         }
       }
@@ -208,8 +214,9 @@ const mapvalues = (obj, f) =>
  * @param {Brand} brand
  * @param {ReturnType<typeof monitorIssuers>} issuersP
  * @param {ERef<Worksheet>} sheet
+ * @param {() => Date} clock
  */
-const monitorCollateral = async (vaultPub, brand, issuersP, sheet) => {
+const monitorCollateral = async (vaultPub, brand, issuersP, sheet, clock) => {
   const issuers = await issuersP;
   const subscription = await E(
     E(vaultPub).getCollateralManager(brand),
@@ -229,6 +236,7 @@ const monitorCollateral = async (vaultPub, brand, issuersP, sheet) => {
       numVaults,
       numLiquidationsCompleted,
       ...mapvalues(amounts, issuers.fmtAmount),
+      insertedAt: clock().toISOString(),
     });
   });
 };
@@ -237,8 +245,9 @@ const monitorCollateral = async (vaultPub, brand, issuersP, sheet) => {
  * @param {ERef<VaultFactoryPublicFacet>} vaultPub
  * @param {ReturnType<typeof monitorIssuers>} issuersP
  * @param {ReturnType<getSheets>} sheets
+ * @param {() => Date} clock
  */
-const monitorVaultFactory = async (vaultPub, issuersP, sheets) => {
+const monitorVaultFactory = async (vaultPub, issuersP, sheets, clock) => {
   const issuers = await issuersP;
   const subscription = await E(vaultPub).getMetrics();
   const notifier = makeNotifierFromAsyncIterable(subscription);
@@ -253,9 +262,10 @@ const monitorVaultFactory = async (vaultPub, issuersP, sheets) => {
         updateCount,
         collateral: fmtPetname(name),
         rewardPoolAllocation: `${q(rewardPoolAllocation)}`,
+        insertedAt: clock().toISOString(),
       });
       if (!seen.has(collateral)) {
-        monitorCollateral(vaultPub, collateral, issuersP, sheets.vaults);
+        monitorCollateral(vaultPub, collateral, issuersP, sheets.vaults, clock);
         seen.add(collateral);
       }
     }
@@ -281,25 +291,25 @@ const getSheets = (scratch) => {
  * @param {ERef<Home>} homeP
  * @param {{
  *   lookup: (...parts: string[]) => ERef<any>,
+ *   clock?: () => Date,
  * }} _endowments
- *
  * @typedef {{
  *   wallet: ERef<WalletUser>,
  *   zoe: ERef<ZoeService>,
  *   scratch: ERef<MapStore<string, unknown>>,
  * }} Home
- *
  * @typedef {typeof import('./src/plugin-sheets').bootPlugin} SheetPlugin
  * @typedef {ReturnType<Awaited<ReturnType<SheetPlugin>>['start']>} Workbook
  * @typedef {ReturnType<Awaited<Workbook>['sheetByIndex']>} Worksheet
  */
-const monitorIST = async (homeP, { lookup }) => {
+const monitorIST = async (homeP, { lookup, clock = () => new Date() }) => {
   const { wallet, zoe, scratch } = E.get(homeP);
   const bridge = E(wallet).getBridge();
   const sheets = getSheets(scratch);
   const issuers = monitorIssuers(
     E(bridge).getIssuersNotifier(),
     sheets.issuers,
+    clock,
   );
   /** @type {(name: string) => Promise<Instance>} */
   const getInstance = (name) => E(lookup)('agoricNames', 'instance', name);
@@ -312,8 +322,8 @@ const monitorIST = async (homeP, { lookup }) => {
   const vaultPub = E(zoe).getPublicFacet(vaultInstanceP);
 
   await Promise.all([
-    monitorPools(ammPub, issuers, sheets),
-    monitorVaultFactory(vaultPub, issuers, sheets),
+    monitorPools(ammPub, issuers, sheets, clock),
+    monitorVaultFactory(vaultPub, issuers, sheets, clock),
   ]);
 
   // history[10] {"done":false,"value":{"XYK":[]}}
