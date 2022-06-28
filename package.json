@@ -42,6 +42,9 @@
     "build": "yarn workspaces run build"
   },
   "dependencies": {
+    "@agoric/casting": "dev",
+    "@endo/init": "dev",
+    "@endo/marshal": "dev",
     "agoric": "^0.14.1"
   },
   "ava": {
