@@ -18,7 +18,6 @@ import {
 
 const makeBrandInfo = () => {
   const seen = new Map();
-  const byName = new Map();
   const self = harden({
     /**
      *
