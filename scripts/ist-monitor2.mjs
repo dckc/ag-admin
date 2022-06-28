@@ -21,31 +21,56 @@ const decimal = (n, exp) => Number(n) / 10 ** exp;
 
 const bp = n => `${Number(n) / 100.0}%`;
 
-// Iterate over a mailbox follower on the devnet.
-const monitorPools = async leader => {
-  const key = ':published.amm.governance';
-  const castingSpec = makeCastingSpec(key);
-  const follower = makeFollower(castingSpec, leader);
-  for await (const { value } of iterateLatest(follower)) {
-    console.log(`${key} value`, Object.keys(value.current));
-    const {
-      // Electorate: { value: electorate },
-      MinInitialPoolLiquidity: {
-        value: { value: minInitialPoolLiquidity },
+const fmtBrand = b => `${b}`; // TODO
+
+const monitorAMM = async leader => {
+  const parts = {
+    metrics: {
+      sheet: 'swaps',
+      decode: ({ XYK: brands }) => {
+        return brands.map(b => ({ brand: fmtBrand(b) }));
       },
-      PoolFee: { value: poolFeeBP },
-      ProtocolFee: { value: protocolFeeBP },
-    } = value.current;
-    console.log('addr row:', {
-      poolFee: bp(poolFeeBP),
-      protocolFeeBP: bp(protocolFeeBP),
-      minInitialPoolLiquidity: decimal(minInitialPoolLiquidity, 6),
-    });
-  }
+    },
+    governance: {
+      sheet: 'ammGov',
+      decode: value => {
+        // console.debug(`amm gov update`, Object.keys(value.current));
+        const {
+          // Electorate: { value: electorate },
+          MinInitialPoolLiquidity: { value: minInitialPoolLiquidity },
+          PoolFee: { value: poolFeeBP },
+          ProtocolFee: { value: protocolFeeBP },
+        } = value.current;
+        return [
+          {
+            poolFee: bp(poolFeeBP),
+            protocolFeeBP: bp(protocolFeeBP),
+            minInitialPoolLiquidity: decimal(minInitialPoolLiquidity.value, 6),
+          },
+        ];
+      },
+    },
+  };
+
+  return Promise.all(
+    Object.entries(parts).map(async ([key, part]) => {
+      const follower = makeFollower(
+        makeCastingSpec(`:published.amm.${key}`),
+        leader,
+      );
+
+      for await (const { value } of iterateLatest(follower)) {
+        // console.debug('item', item);
+        for (const row of part.decode(value)) {
+          console.log(part.sheet, 'add row:', row);
+        }
+      }
+    }),
+  );
 };
 
 const monitorIST = async ({ leader, clock }) => {
-  await Promise.all([monitorPools(leader, clock)]);
+  await Promise.all([monitorAMM(leader, clock)]);
 };
 
 // default leader is localhost
