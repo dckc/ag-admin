@@ -43,6 +43,9 @@ const makeBrandInfo = () => {
         assert(parts, `brand??? ${b}`);
         name = parts[1];
         console.warn('inferred brand name:', { iface: `${b}`, name });
+        if (name === 'IbcATOM') {
+          decimalPlaces = 4; // KLUDGE!
+        }
       }
       if (byName.has(name)) {
         // ISSUE: unmarshaling doesn't work like I thought.
@@ -66,6 +69,10 @@ const makeBrandInfo = () => {
 };
 
 const Fmt = {
+  decimal: (value, decimalPlaces) => {
+    return Number(value) / 10 ** decimalPlaces;
+  },
+
   /** @param {bigint} n */
   bp: n => Number(n) / 10000.0,
 
@@ -108,7 +115,7 @@ const monitorCollateral = async (ix, brand, leader, brandInfo, upsert) => {
   const name = brandInfo.getName(brand);
   const parts = {
     metrics: {
-      sheet: `asset`,
+      sheet: 'vaults',
       decode: ({ numVaults, numLiquidationsCompleted, ...amounts }) => [
         {
           key: (seq += 1),
@@ -123,12 +130,12 @@ const monitorCollateral = async (ix, brand, leader, brandInfo, upsert) => {
       ],
     },
     governance: {
-      sheet: `asset`,
+      sheet: `collateralGov`,
       decode: ({ current }) => [
         {
           key: (seq += 1),
           row: {
-            brand: name,
+            collateral: name,
             ...mapValues(current, v => Fmt.item(v, brandInfo)),
           },
         },
@@ -167,7 +174,7 @@ const monitorVaults = async (leader, brandInfo, upsert) => {
       sheet: 'collaterals',
       decode: value => {
         // console.debug(unEval(value));
-        const { collaterals, rewardPoolAllocation: _ } = value;
+        const { collaterals, rewardPoolAllocation } = value;
         for (const brand of collaterals) {
           if (!seen.has(brand)) {
             monitorCollateral(
@@ -182,7 +189,10 @@ const monitorVaults = async (leader, brandInfo, upsert) => {
         }
         return collaterals.map(brand => ({
           key: JSON.stringify([(seq += 1), brandInfo.getName(brand)]),
-          row: { brand: brandInfo.getName(brand) },
+          row: {
+            collateral: brandInfo.getName(brand),
+            rewardPoolAllocation: brandInfo.fmtAmount(rewardPoolAllocation.RUN),
+          },
         }));
       },
     },
@@ -278,12 +288,57 @@ const monitorVaults = async (leader, brandInfo, upsert) => {
 };
 
 /**
+ * @param {number} ix
+ * @param {Brand} brand
+ * @param {Leader} leader
+ * @param {BrandInfo} brandInfo
+ * @param {Upsert} upsert
+ */
+const monitorPool = async (ix, brand, leader, brandInfo, upsert) => {
+  let seq = 0; // ISSUE: stable sequence numbers between runs
+  const name = brandInfo.getName(brand);
+  const parts = {
+    metrics: {
+      sheet: 'swaps',
+      decode: ({ centralAmount, secondaryAmount, liquidityTokens }) => [
+        {
+          key: (seq += 1),
+          row: {
+            pool: brandInfo.getName(brand),
+            Central: brandInfo.fmtAmount(centralAmount),
+            Secondary: brandInfo.fmtAmount(secondaryAmount),
+            Liquidity: Fmt.decimal(liquidityTokens.value, 6),
+          },
+        },
+      ],
+    },
+  };
+
+  return Promise.all(
+    entries(parts).map(async ([child, part]) => {
+      const follower = makeFollower(
+        makeCastingSpec(`:published.amm.pool${ix}.${child}`),
+        leader,
+      );
+
+      for await (const { value } of iterateLatest(follower)) {
+        // console.debug('item', item);
+        for (const { key, row } of part.decode(value)) {
+          upsert(part.sheet, key, row);
+        }
+      }
+    }),
+  );
+};
+
+/**
  * @param {Leader} leader
  * @param {BrandInfo} brandInfo
  * @param {Upsert} upsert
  */
 const monitorAMM = async (leader, brandInfo, upsert) => {
   let seq = 0;
+  const seen = new Set();
 
   const parts = {
     metrics: {
@@ -291,6 +346,13 @@ const monitorAMM = async (leader, brandInfo, upsert) => {
       decode: ({ XYK: brands }) => {
         return brands.map(b => {
           const name = brandInfo.getName(b);
+
+          if (!seen.has(b)) {
+            monitorPool(seen.size, b, leader, brandInfo, upsert).catch(err =>
+              console.error('ammPool', err),
+            );
+            seen.add(b);
+          }
           return { key: name, row: { brand: name } };
         });
       },
