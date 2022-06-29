@@ -16,26 +16,37 @@ import {
 
 // agd query vstorage keys published.amm.metrics --node='https://xnet.rpc.agoric.net:443'
 
+const { entries, fromEntries } = Object;
+
+const mapValues = (obj, f) =>
+  fromEntries(entries(obj).map(([k, v]) => [k, f(v)]));
+
+/** @typedef {ReturnType<typeof makeBrandInfo>} BrandInfo */
 const makeBrandInfo = () => {
   const seen = new Map();
+  const byName = new Map();
   const self = harden({
     /**
-     *
-     * @param {*} b
+     * @param {Brand} b
      * @param {string} [name]
      * @param {{ decimalPlaces?: number}} [param2]
      */
     add: (b, name = undefined, { decimalPlaces = 6 } = {}) => {
+      if (seen.has(b)) {
+        assert(!name);
+        return;
+      }
       if (!name) {
         const parts = `${b}`.match(/: ([^:]+) brand]$/);
         assert(parts, `brand??? ${b}`);
         name = parts[1];
+        console.warn('inferred brand name:', { iface: `${b}`, name });
       }
-      if (seen.has(b)) {
-        // ensure we give consistent info about brands;
-        assert.equal(seen.get(b).name, name);
-        assert.equal(seen.get(b).decimalPlaces, decimalPlaces);
-        return;
+      if (byName.has(name)) {
+        // ISSUE: unmarshaling doesn't work like I thought.
+        console.warn(`duplicate brand for ${name}: ${b}`);
+      } else {
+        byName.set(name, b);
       }
       seen.set(b, { name, decimalPlaces });
     },
@@ -44,7 +55,7 @@ const makeBrandInfo = () => {
       return seen.get(brand).name;
     },
     fmtAmount: ({ brand, value }) => {
-      seen.has(brand) || self.add(brand);
+      self.add(brand);
       const { decimalPlaces } = seen.get(brand);
       return Number(value) / 10 ** decimalPlaces;
     },
@@ -54,14 +65,28 @@ const makeBrandInfo = () => {
 
 const Fmt = {
   /** @param {bigint} n */
-  bp: n => `${Number(n) / 100.0}%`,
+  bp: n => Number(n) / 10000.0,
 
   /** @param {bigint} n */
   duration: n => Number(n) / 60 / 60 / 24,
 
+  /** @param {Ratio} x */
   ratio: ({ numerator, denominator }) => {
     assert.equal(numerator.brand, denominator.brand);
-    return `${(Number(numerator.value) / Number(denominator.value)) * 100}%`;
+    return Number(numerator.value) / Number(denominator.value);
+  },
+
+  item: ({ type, value }, brandInfo) => {
+    switch (type) {
+      case 'amount':
+        return brandInfo.fmtAmount(value);
+      case 'ratio':
+        return Fmt.ratio(value);
+      case 'nat':
+        return Fmt.duration(value);
+      default:
+        throw Error(`not impl: ${type}`);
+    }
   },
 };
 
@@ -70,23 +95,99 @@ export const unEval = (x, pretty = false) =>
   decodeToJustin(JSON.parse(serialize(harden(x)).body), pretty);
 
 /**
- * @param {ReturnType<typeof makeLeader>} leader
- * @param {ReturnType<typeof makeBrandInfo>} brandInfo
+ * @param {number} ix
+ * @param {Brand} brand
+ * @param {Leader} leader
+ * @param {BrandInfo} brandInfo
+ * @param {Upsert} upsert
  */
-const monitorVaults = async (leader, brandInfo) => {
+const monitorCollateral = async (ix, brand, leader, brandInfo, upsert) => {
+  let seq = 0;
+  const name = brandInfo.getName(brand);
+  const parts = {
+    metrics: {
+      sheet: `asset`,
+      decode: ({ numVaults, numLiquidationsCompleted, ...amounts }) => [
+        {
+          key: (seq += 1),
+          row: {
+            brand: name,
+            collateral: brandInfo.getName(brand),
+            numVaults,
+            numLiquidationsCompleted,
+            ...mapValues(amounts, brandInfo.fmtAmount),
+          },
+        },
+      ],
+    },
+    governance: {
+      sheet: `asset`,
+      decode: ({ current }) => [
+        {
+          key: (seq += 1),
+          row: {
+            brand: name,
+            ...mapValues(current, v => Fmt.item(v, brandInfo)),
+          },
+        },
+      ],
+    },
+  };
+
+  return Promise.all(
+    entries(parts).map(async ([child, part]) => {
+      const follower = makeFollower(
+        makeCastingSpec(`:published.vaultFactory.manager${ix}.${child}`),
+        leader,
+      );
+
+      for await (const { value } of iterateLatest(follower)) {
+        // console.debug('item', item);
+        for (const { key, row } of part.decode(value)) {
+          upsert(part.sheet, key, row);
+        }
+      }
+    }),
+  );
+};
+
+/**
+ * @param {Leader} leader
+ * @param {BrandInfo} brandInfo
+ * @param {Upsert} upsert
+ */
+const monitorVaults = async (leader, brandInfo, upsert) => {
+  const seen = new Set();
+  let seq = 0;
+
   const parts = {
     metrics: {
       sheet: 'collaterals',
       decode: value => {
         // console.debug(unEval(value));
         const { collaterals, rewardPoolAllocation: _ } = value;
-        return collaterals.map(brand => ({ brand: brandInfo.getName(brand) }));
+        for (const brand of collaterals) {
+          if (!seen.has(brand)) {
+            monitorCollateral(
+              seen.size,
+              brand,
+              leader,
+              brandInfo,
+              upsert,
+            ).catch(err => console.error('vault??', err));
+            seen.add(brand);
+          }
+        }
+        return collaterals.map(brand => ({
+          key: JSON.stringify([(seq += 1), brandInfo.getName(brand)]),
+          row: { brand: brandInfo.getName(brand) },
+        }));
       },
     },
     governance: {
       sheet: 'vaultGov',
       decode: ({ current }) => {
-        // console.log('vaultGov', unEval(current, true));
+        // console.debug('vaultGov', unEval(current, true));
         const {
           // Electorate,
           // LiquidationInstall,
@@ -98,67 +199,76 @@ const monitorVaults = async (leader, brandInfo) => {
         } = current;
         return [
           {
-            AMMMaxSlippage: Fmt.ratio(AMMMaxSlippage),
-            MaxImpact: Fmt.bp(MaxImpactBP),
-            OracleTolerance: Fmt.ratio(OracleTolerance),
-            MinInitialDebt: brandInfo.fmtAmount(MinInitialDebt.value),
+            key: (seq += 1),
+            row: {
+              AMMMaxSlippage: Fmt.ratio(AMMMaxSlippage),
+              MaxImpact: Fmt.bp(MaxImpactBP),
+              OracleTolerance: Fmt.ratio(OracleTolerance),
+              MinInitialDebt: brandInfo.fmtAmount(MinInitialDebt.value),
+            },
           },
         ];
       },
     },
-    collateralParams: {
-      sheet: 'collateralParams',
-      decode: value => {
-        console.log('collateralParams', unEval(value, true));
-        const {
-          current: {
-            DebtLimit,
-            InterestRate,
-            LiquidationMargin,
-            LiquidationPenalty,
-            LoanFee,
-          },
-        } = value;
-        return [
-          {
-            DebtLimit: brandInfo.fmtAmount(DebtLimit.value),
-            InterestRate: Fmt.ratio(InterestRate.value),
-            LiquidationMargin: Fmt.ratio(LiquidationMargin.value),
-            LiquidationPenalty: Fmt.ratio(LiquidationPenalty.value),
-            LoanFee: Fmt.ratio(LoanFee.value),
-          },
-        ];
-      },
-    },
+    // dup of collateral governance?
+    // collateralParams: {
+    //   sheet: 'collateralParams',
+    //   decode: value => {
+    //     // console.debug('collateralParams', unEval(value, true));
+    //     const {
+    //       current: {
+    //         DebtLimit,
+    //         InterestRate,
+    //         LiquidationMargin,
+    //         LiquidationPenalty,
+    //         LoanFee,
+    //       },
+    //     } = value;
+    //     return [
+    //       {
+    //         key: (seq += 1),
+    //         row: {
+    //           ...mapValues(
+    //             {
+    //               DebtLimit,
+    //               InterestRate,
+    //               LiquidationMargin,
+    //               LiquidationPenalty,
+    //               LoanFee,
+    //             },
+    //             v => Fmt.item(v, brandInfo),
+    //           ),
+    //         },
+    //       },
+    //     ];
+    //   },
+    // },
     timingParams: {
       sheet: 'timingParams',
-      decode: ({
-        current: {
-          ChargingPeriod: { value: cp },
-          RecordingPeriod: { value: rp },
+      decode: ({ current: { ChargingPeriod, RecordingPeriod } }) => [
+        {
+          key: (seq += 1),
+          row: {
+            ...mapValues({ ChargingPeriod, RecordingPeriod }, v =>
+              Fmt.item(v, brandInfo),
+            ),
+          },
         },
-      }) => [
-        { chargingPeriod: Fmt.duration(cp), recordingPeriod: Fmt.duration(rp) },
       ],
     },
-    // // TODO: N of these
-    // manager0: {
-    //   sheet: 'asset',
-    //   decode: value => [value],
-    // },
   };
 
   return Promise.all(
-    Object.entries(parts).map(async ([key, part]) => {
+    entries(parts).map(async ([child, part]) => {
       const follower = makeFollower(
-        makeCastingSpec(`:published.vaultFactory.${key}`),
+        makeCastingSpec(`:published.vaultFactory.${child}`),
         leader,
       );
 
       for await (const { value } of iterateLatest(follower)) {
         // console.debug('item', item);
-        for (const row of part.decode(value)) {
-          console.log(part.sheet, 'add row:', row);
+        for (const { key, row } of part.decode(value)) {
+          upsert(part.sheet, key, row);
         }
       }
     }),
@@ -166,15 +276,21 @@ const monitorVaults = async (leader, brandInfo) => {
 };
 
 /**
- * @param {ReturnType<typeof makeLeader>} leader
- * @param {ReturnType<typeof makeBrandInfo>} brandInfo
+ * @param {Leader} leader
+ * @param {BrandInfo} brandInfo
+ * @param {Upsert} upsert
  */
-const monitorAMM = async (leader, brandInfo) => {
+const monitorAMM = async (leader, brandInfo, upsert) => {
+  let seq = 0;
+
   const parts = {
     metrics: {
-      sheet: 'swaps',
+      sheet: 'pools',
       decode: ({ XYK: brands }) => {
-        return brands.map(b => ({ brand: brandInfo.getName(b) }));
+        return brands.map(b => {
+          const name = brandInfo.getName(b);
+          return { key: name, row: { brand: name } };
+        });
       },
     },
     governance: {
@@ -189,11 +305,14 @@ const monitorAMM = async (leader, brandInfo) => {
         } = value.current;
         return [
           {
-            poolFee: Fmt.bp(poolFeeBP),
-            protocolFeeBP: Fmt.bp(protocolFeeBP),
-            minInitialPoolLiquidity: brandInfo.fmtAmount(
-              minInitialPoolLiquidity,
-            ),
+            key: (seq += 1),
+            row: {
+              PoolFee: Fmt.bp(poolFeeBP),
+              ProtocolFee: Fmt.bp(protocolFeeBP),
+              MinInitialPoolLiquidity: brandInfo.fmtAmount(
+                minInitialPoolLiquidity,
+              ),
+            },
           },
         ];
       },
@@ -201,27 +320,42 @@ const monitorAMM = async (leader, brandInfo) => {
   };
 
   return Promise.all(
-    Object.entries(parts).map(async ([key, part]) => {
+    entries(parts).map(async ([child, part]) => {
       const follower = makeFollower(
-        makeCastingSpec(`:published.amm.${key}`),
+        makeCastingSpec(`:published.amm.${child}`),
         leader,
       );
 
       for await (const { value } of iterateLatest(follower)) {
         // console.debug('item', item);
-        for (const row of part.decode(value)) {
-          console.log(part.sheet, 'add row:', row);
+        for (const { key, row } of part.decode(value)) {
+          upsert(part.sheet, key, row);
         }
       }
     }),
   );
 };
 
-const monitorIST = async ({ leader, clock: _TODO }) => {
+/**
+ * @param {{ leader: Leader, clock: Clock }} io
+ * @typedef {ReturnType<typeof makeLeader>} Leader
+ * @typedef {() => Date} Clock
+ * @typedef {(sheet: string, key: string|number, row: Row) => void} Upsert
+ * @typedef {Record<string, string|number>} Row
+ */
+const monitorIST = async ({ leader, clock }) => {
   const brandInfo = makeBrandInfo();
+
+  /** @type {Upsert} */
+  const upsert = (sheet, key, row) => {
+    console.log(sheet, 'upsert @', key, {
+      ...row,
+      insertedAt: clock().toISOString().replace(/Z$/, ''),
+    });
+  };
   await Promise.all([
-    monitorAMM(leader, brandInfo),
-    monitorVaults(leader, brandInfo),
+    monitorAMM(leader, brandInfo, upsert),
+    monitorVaults(leader, brandInfo, upsert),
   ]);
 };
 
