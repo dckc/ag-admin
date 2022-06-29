@@ -14,6 +14,8 @@ import {
   makeCastingSpec,
 } from '@agoric/casting';
 
+import * as sheetAccess from '../api/src/sheetAccess.cjs';
+
 // agd query vstorage keys published.amm.metrics --node='https://xnet.rpc.agoric.net:443'
 
 const { entries, fromEntries } = Object;
@@ -102,7 +104,7 @@ export const unEval = (x, pretty = false) =>
  * @param {Upsert} upsert
  */
 const monitorCollateral = async (ix, brand, leader, brandInfo, upsert) => {
-  let seq = 0;
+  let seq = 0; // ISSUE: stable sequence numbers between runs
   const name = brandInfo.getName(brand);
   const parts = {
     metrics: {
@@ -337,22 +339,43 @@ const monitorAMM = async (leader, brandInfo, upsert) => {
 };
 
 /**
- * @param {{ leader: Leader, clock: Clock }} io
+ * @param {Record<string, string|undefined>} env
+ * @param {Object} io
+ * @param {Leader} io.leader
+ * @param {Clock} io.clock
+ * @param {typeof import('google-spreadsheet').GoogleSpreadsheet} io.GoogleSpreadsheet
  * @typedef {ReturnType<typeof makeLeader>} Leader
  * @typedef {() => Date} Clock
  * @typedef {(sheet: string, key: string|number, row: Row) => void} Upsert
  * @typedef {Record<string, string|number>} Row
  */
-const monitorIST = async ({ leader, clock }) => {
+const monitorIST = async (env, { leader, clock, GoogleSpreadsheet }) => {
   const brandInfo = makeBrandInfo();
 
+  // Initialize the sheet - doc ID is the long id in the sheets URL
+  const doc = new GoogleSpreadsheet(env.SHEET2_ID);
+  const creds = {
+    client_email: env.GOOGLE_SERVICES_EMAIL,
+    private_key: env.GCS_PRIVATE_KEY,
+  };
+  // Initialize Auth - see https://theoephraim.github.io/node-google-spreadsheet/#/getting-started/authentication
+  await doc.useServiceAccountAuth(creds);
+  await doc.loadInfo(); // loads document properties and worksheets
+  console.log(doc.title);
+
   /** @type {Upsert} */
-  const upsert = (sheet, key, row) => {
-    console.log(sheet, 'upsert @', key, {
+  const upsert = (sheetName, key, row) => {
+    const rowT = {
+      key,
       ...row,
       insertedAt: clock().toISOString().replace(/Z$/, ''),
-    });
+    };
+    console.log(sheetName, ': upsert @', key, rowT);
+    const sheet = doc.sheetsByTitle[sheetName];
+    assert(sheet, sheetName);
+    sheetAccess.upsert(sheet, key, rowT);
   };
+
   await Promise.all([
     monitorAMM(leader, brandInfo, upsert),
     monitorVaults(leader, brandInfo, upsert),
@@ -361,4 +384,12 @@ const monitorIST = async ({ leader, clock }) => {
 
 // default leader is localhost
 // const leader = makeLeader('https://xnet.agoric.net/network-config');
-monitorIST({ leader: makeLeader(), clock: () => new Date() });
+/* global process */
+import('google-spreadsheet')
+  .then(({ GoogleSpreadsheet }) => {
+    monitorIST(
+      { ...process.env },
+      { GoogleSpreadsheet, leader: makeLeader(), clock: () => new Date() },
+    );
+  })
+  .catch(err => console.error(err));
