@@ -77,7 +77,7 @@ const main = async (argv, env, { GoogleSpreadsheet }) => {
 };
 
 /* global require, process */
-if (require.main === module) {
+if (typeof require !== 'undefined' && require.main === module) {
   main(
     process.argv.slice(2),
     { ...process.env },
@@ -85,7 +85,7 @@ if (require.main === module) {
       // eslint-disable-next-line global-require
       GoogleSpreadsheet: require('google-spreadsheet').GoogleSpreadsheet, // please excuse CJS
     },
-  ).catch(err => console.error(err));
+  ).catch((err) => console.error(err));
 }
 
 /* global module */
