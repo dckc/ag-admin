@@ -42,6 +42,7 @@
     "build": "yarn workspaces run build"
   },
   "dependencies": {
+    "google-spreadsheet": "*",
     "@agoric/casting": "dev",
     "@endo/init": "dev",
     "@endo/marshal": "dev",
