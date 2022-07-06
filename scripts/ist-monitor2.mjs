@@ -151,8 +151,8 @@ const monitorCollateral = async (ix, brand, leader, brandInfo, upsert) => {
   return Promise.all(
     entries(parts).map(async ([child, part]) => {
       const follower = makeFollower(
-        leader,
         makeCastingSpec(`:published.vaultFactory.manager${ix}.${child}`),
+        leader,
       );
 
       for await (const { value } of iterateLatest(follower)) {
@@ -278,8 +278,8 @@ const monitorVaults = async (leader, brandInfo, upsert) => {
   return Promise.all(
     entries(parts).map(async ([child, part]) => {
       const follower = makeFollower(
-        leader,
         makeCastingSpec(`:published.vaultFactory.${child}`),
+        leader,
       );
 
       for await (const { value } of iterateLatest(follower)) {
@@ -323,7 +323,7 @@ const monitorPool = async (ix, brand, leader, brandInfo, upsert) => {
     entries(parts).map(async ([child, part]) => {
       const path = `:published.amm.pool${ix}.${child}`;
       console.log({ ix, child, path });
-      const follower = makeFollower(leader, makeCastingSpec(path));
+      const follower = makeFollower(makeCastingSpec(path), leader);
 
       for await (const { value } of iterateLatest(follower)) {
         // console.debug('item', item);
@@ -392,8 +392,8 @@ const monitorAMM = async (leader, brandInfo, upsert) => {
   return Promise.all(
     entries(parts).map(async ([child, part]) => {
       const follower = makeFollower(
-        leader,
         makeCastingSpec(`:published.amm.${child}`),
+        leader,
       );
 
       // eslint-disable-next-line no-await-in-loop
