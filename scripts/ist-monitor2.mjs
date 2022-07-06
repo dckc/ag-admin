@@ -23,6 +23,11 @@ const { entries, fromEntries } = Object;
 const mapValues = (obj, f) =>
   fromEntries(entries(obj).map(([k, v]) => [k, f(v)]));
 
+const DAY = 24 * 60 * 60 * 1000;
+const epoch1900 = new Date(1900, 1, 1).valueOf() - 2 * DAY;
+const epoch1970 = new Date(1970, 1, 1).valueOf();
+const daysSince1900 = dt => (dt.valueOf() + epoch1970 - epoch1900) / DAY;
+
 /** @typedef {ReturnType<typeof makeBrandInfo>} BrandInfo */
 const makeBrandInfo = () => {
   const seen = new Map();
@@ -146,8 +151,8 @@ const monitorCollateral = async (ix, brand, leader, brandInfo, upsert) => {
   return Promise.all(
     entries(parts).map(async ([child, part]) => {
       const follower = makeFollower(
-        makeCastingSpec(`:published.vaultFactory.manager${ix}.${child}`),
         leader,
+        makeCastingSpec(`:published.vaultFactory.manager${ix}.${child}`),
       );
 
       for await (const { value } of iterateLatest(follower)) {
@@ -273,8 +278,8 @@ const monitorVaults = async (leader, brandInfo, upsert) => {
   return Promise.all(
     entries(parts).map(async ([child, part]) => {
       const follower = makeFollower(
-        makeCastingSpec(`:published.vaultFactory.${child}`),
         leader,
+        makeCastingSpec(`:published.vaultFactory.${child}`),
       );
 
       for await (const { value } of iterateLatest(follower)) {
@@ -304,7 +309,7 @@ const monitorPool = async (ix, brand, leader, brandInfo, upsert) => {
         {
           key: (seq += 1),
           row: {
-            pool: brandInfo.getName(brand),
+            pool: name,
             Central: brandInfo.fmtAmount(centralAmount),
             Secondary: brandInfo.fmtAmount(secondaryAmount),
             Liquidity: Fmt.decimal(liquidityTokens.value, 6),
@@ -316,10 +321,9 @@ const monitorPool = async (ix, brand, leader, brandInfo, upsert) => {
 
   return Promise.all(
     entries(parts).map(async ([child, part]) => {
-      const follower = makeFollower(
-        makeCastingSpec(`:published.amm.pool${ix}.${child}`),
-        leader,
-      );
+      const path = `:published.amm.pool${ix}.${child}`;
+      console.log({ ix, child, path });
+      const follower = makeFollower(leader, makeCastingSpec(path));
 
       for await (const { value } of iterateLatest(follower)) {
         // console.debug('item', item);
@@ -344,12 +348,14 @@ const monitorAMM = async (leader, brandInfo, upsert) => {
     metrics: {
       sheet: 'pools',
       decode: ({ XYK: brands }) => {
+        console.debug('AMM brands', brands);
         return brands.map(b => {
           const name = brandInfo.getName(b);
 
           if (!seen.has(b)) {
-            monitorPool(seen.size, b, leader, brandInfo, upsert).catch(err =>
-              console.error('ammPool', err),
+            const ix = seen.size;
+            monitorPool(ix, b, leader, brandInfo, upsert).catch(err =>
+              console.error(`ammPool ${ix}`, err),
             );
             seen.add(b);
           }
@@ -386,14 +392,21 @@ const monitorAMM = async (leader, brandInfo, upsert) => {
   return Promise.all(
     entries(parts).map(async ([child, part]) => {
       const follower = makeFollower(
-        makeCastingSpec(`:published.amm.${child}`),
         leader,
+        makeCastingSpec(`:published.amm.${child}`),
       );
 
-      for await (const { value } of iterateLatest(follower)) {
-        // console.debug('item', item);
-        for (const { key, row } of part.decode(value)) {
-          upsert(part.sheet, key, row);
+      for (;;) {
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          for await (const { value } of iterateLatest(follower)) {
+            // console.debug('item', item);
+            for (const { key, row } of part.decode(value)) {
+              upsert(part.sheet, key, row);
+            }
+          }
+        } catch (err) {
+          console.error('monitorAMM failing:', err);
         }
       }
     }),
@@ -430,7 +443,7 @@ const monitorIST = async (env, { leader, clock, GoogleSpreadsheet }) => {
     const rowT = {
       key,
       ...row,
-      insertedAt: clock().toISOString().replace(/Z$/, ''),
+      insertedAt: daysSince1900(clock()),
     };
     console.log(sheetName, ': upsert @', key, rowT);
     const sheet = doc.sheetsByTitle[sheetName];
@@ -445,13 +458,14 @@ const monitorIST = async (env, { leader, clock, GoogleSpreadsheet }) => {
 };
 
 // default leader is localhost
-// const leader = makeLeader('https://xnet.agoric.net/network-config');
+const leader = makeLeader('https://xnet.agoric.net/network-config', {});
+
 /* global process */
 import('google-spreadsheet')
   .then(({ GoogleSpreadsheet }) => {
     monitorIST(
       { ...process.env },
-      { GoogleSpreadsheet, leader: makeLeader(), clock: () => new Date() },
+      { GoogleSpreadsheet, leader, clock: () => new Date() },
     );
   })
   .catch(err => console.error(err));
