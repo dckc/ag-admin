@@ -396,17 +396,11 @@ const monitorAMM = async (leader, brandInfo, upsert) => {
         makeCastingSpec(`:published.amm.${child}`),
       );
 
-      for (;;) {
-        try {
-          // eslint-disable-next-line no-await-in-loop
-          for await (const { value } of iterateLatest(follower)) {
-            // console.debug('item', item);
-            for (const { key, row } of part.decode(value)) {
-              upsert(part.sheet, key, row);
-            }
-          }
-        } catch (err) {
-          console.error('monitorAMM failing:', err);
+      // eslint-disable-next-line no-await-in-loop
+      for await (const { value } of iterateLatest(follower)) {
+        // console.debug('item', item);
+        for (const { key, row } of part.decode(value)) {
+          upsert(part.sheet, key, row);
         }
       }
     }),
