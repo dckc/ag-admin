@@ -72,11 +72,11 @@ const monitorIssuers = async (notifier, sheet, clock) => {
   let issuers = first.value;
 
   // runs in "background"
-  forEachNotice(notifier, ({ updateCount, value }) => {
+  void forEachNotice(notifier, async ({ updateCount, value }) => {
     issuers = value;
     for (const [name, detail] of issuers) {
-      upsertKey(sheet, ['updateCount', 'name'], {
-        updateCount,
+      await upsertKey(sheet, ['updateCount', 'name'], {
+        updateCount: Number(updateCount),
         name: fmtPetname(name),
         issuerBoardId: detail.issuerBoardId,
         detail: `${q(detail)}`,
@@ -149,8 +149,8 @@ const monitorPool = async (ammPub, brand, issuersP, sheet, clock) => {
         displayInfo: { decimalPlaces },
       },
     ] = issuers.findRecord(centralAmount.brand);
-    upsertKey(sheet, ['updateCount', 'pool'], {
-      updateCount,
+    await upsertKey(sheet, ['updateCount', 'pool'], {
+      updateCount: Number(updateCount),
       pool: fmtPetname(name),
       Central: issuers.fmtAmount(centralAmount),
       Secondary: issuers.fmtAmount(secondaryAmount),
@@ -179,8 +179,8 @@ const monitorPools = async (ammPub, issuersP, sheets, clock) => {
       console.log('monitorPools', { updateCount });
       for (const brand of brands) {
         const [name] = issuers.brandNames([brand]);
-        upsertKey(sheets.pools, ['updateCount', 'brand'], {
-          updateCount,
+        await upsertKey(sheets.pools, ['updateCount', 'brand'], {
+          updateCount: Number(updateCount),
           brand: fmtPetname(name),
           insertedAt: clock().toISOString(),
         });
@@ -230,8 +230,8 @@ const monitorCollateral = async (vaultPub, brand, issuersP, sheet, clock) => {
     });
     const { numVaults, numLiquidationsCompleted, ...amounts } = value;
     const [name] = issuers.brandNames([brand]);
-    upsertKey(sheet, ['updateCount', 'collateral'], {
-      updateCount,
+    await upsertKey(sheet, ['updateCount', 'collateral'], {
+      updateCount: Number(updateCount),
       collateral: fmtPetname(name),
       numVaults,
       numLiquidationsCompleted,
@@ -258,8 +258,8 @@ const monitorVaultFactory = async (vaultPub, issuersP, sheets, clock) => {
     const { collaterals, rewardPoolAllocation } = value;
     for (const collateral of collaterals) {
       const [name] = issuers.brandNames([collateral]);
-      upsertKey(sheets.collaterals, ['updateCount', 'collateral'], {
-        updateCount,
+      await upsertKey(sheets.collaterals, ['updateCount', 'collateral'], {
+        updateCount: Number(updateCount),
         collateral: fmtPetname(name),
         rewardPoolAllocation: `${q(rewardPoolAllocation)}`,
         insertedAt: clock().toISOString(),
@@ -306,6 +306,7 @@ const monitorIST = async (homeP, { lookup, clock = () => new Date() }) => {
   const { wallet, zoe, scratch } = E.get(homeP);
   const bridge = E(wallet).getBridge();
   const sheets = getSheets(scratch);
+  await Promise.all(Object.values(sheets));
   const issuers = monitorIssuers(
     E(bridge).getIssuersNotifier(),
     sheets.issuers,
