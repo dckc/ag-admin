@@ -1,0 +1,21 @@
+# cribbed from
+# https://nodesource.com/blog/running-your-node-js-app-with-systemd-part-1/
+# https://wiki.archlinux.org/title/systemd/User
+
+[Unit]
+Description=IST Monitor
+Documentation=https://github.com/Agoric/agoric-sdk/issues/5681
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/connolly/projects/ag-admin
+ExecStart=/home/connolly/.nvm/versions/node/v16.13.2/bin/node scripts/ist-monitor2.mjs
+Restart=on-failure
+
+# re Environment, see .envrc
+# and use: systemctl --user import-environment
+
+[Install]
+WantedBy=default.target
+
