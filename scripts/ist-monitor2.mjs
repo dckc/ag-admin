@@ -108,6 +108,8 @@ const { serialize } = makeMarshal();
 export const unEval = (x, pretty = false) =>
   decodeToJustin(JSON.parse(serialize(harden(x)).body), pretty);
 
+const fOpt = { proof: 'none' };
+
 /**
  * @param {number} ix
  * @param {Brand} brand
@@ -153,6 +155,7 @@ const monitorCollateral = async (ix, brand, leader, brandInfo, upsert) => {
       const follower = makeFollower(
         makeCastingSpec(`:published.vaultFactory.manager${ix}.${child}`),
         leader,
+	fOpt,
       );
 
       for await (const { value } of iterateLatest(follower)) {
@@ -280,6 +283,7 @@ const monitorVaults = async (leader, brandInfo, upsert) => {
       const follower = makeFollower(
         makeCastingSpec(`:published.vaultFactory.${child}`),
         leader,
+	fOpt,
       );
 
       for await (const { value } of iterateLatest(follower)) {
@@ -323,7 +327,7 @@ const monitorPool = async (ix, brand, leader, brandInfo, upsert) => {
     entries(parts).map(async ([child, part]) => {
       const path = `:published.amm.pool${ix}.${child}`;
       console.log({ ix, child, path });
-      const follower = makeFollower(makeCastingSpec(path), leader);
+      const follower = makeFollower(makeCastingSpec(path), leader, fOpt);
 
       for await (const { value } of iterateLatest(follower)) {
         // console.debug('item', item);
@@ -394,6 +398,7 @@ const monitorAMM = async (leader, brandInfo, upsert) => {
       const follower = makeFollower(
         makeCastingSpec(`:published.amm.${child}`),
         leader,
+	fOpt,
       );
 
       // eslint-disable-next-line no-await-in-loop
